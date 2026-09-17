@@ -1,0 +1,473 @@
+body.woocommerce-account .main {
+    padding: 0px 20px;
+    font-family: "Quicksand", sans-serif;
+    color: black;
+}
+
+body.woocommerce-account .main .woocommerce {
+    max-width: 1440px;
+    width: 100%;
+    padding: 80px 0px;
+    margin: 0px auto;
+    display: flex;
+    justify-content: space-between;
+    gap: 30px;
+}
+
+body.woocommerce-account .main .woocommerce::before,
+body.woocommerce-account .main .woocommerce::after {
+    display: none;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation {
+    width: 250px;
+    background: white;
+    border-radius: 12px;
+    padding: 25px;
+    position: sticky;
+    top: 40px; /* adjust based on your header height, add more if you have a fixed site header */
+    align-self: flex-start; /* important if the nav is a flex child */
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    border: 1px solid #eee;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    background: white;
+    border-radius: 12px;
+    padding: 30px 50px;
+    width: 100%;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation ul {
+    display: flex;
+    flex-direction: column;
+    gap: 0px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation ul li.is-active {
+    font-weight: 700;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation ul li a {
+    font-size: 20px;
+    color: black;
+    display: flex;
+    padding: 12px 0px;
+    transition: all ease 0.3s;
+    border-bottom: 1px solid #eee;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation ul li:last-child a {
+    border: none;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content table.woocommerce-orders-table {
+    border-collapse: collapse;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content table.woocommerce-orders-table thead tr th {
+    font-family: "Poppins", sans-serif;
+    font-size: 16px;
+    font-weight: 500;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content table.woocommerce-orders-table thead tr th:last-child,
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content table.woocommerce-orders-table tbody tr td:last-child {
+    text-align: right !important;
+}
+
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content table.woocommerce-orders-table tbody tr td a {
+    background: black;
+    color: white;
+    border-radius: 6px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-order-details {
+    margin: 20px 0px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-order-details h2.woocommerce-order-details__title,
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-customer-details h2.woocommerce-column__title {
+    font-family: "Poppins", sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-order-details table {
+    border-collapse: collapse;
+    margin-top: 10px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-customer-details address {
+    margin-top: 10px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-info {
+    border-top-color: black;
+    color: black;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-info::before {
+    color: black;
+    top: 50%;
+    transform: translatey(-50%);
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-info::after {
+    display: none;
+}
+
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-info a {
+    background: black;
+    color: white;
+    border-radius: 6px;
+    white-space: nowrap;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses {
+    display: flex;
+    gap: 20px;
+    justify-content: space-between;
+    margin-top: 30px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses::before,
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses::after {
+    display: none;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses .woocommerce-Address {
+    padding: 15px 15px 50px 15px;
+    border: 1px solid #ececec;
+    border-radius: 12px;
+    position: relative;
+    width: 50%;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses .woocommerce-Address .woocommerce-Address-title {
+    font-size: 20px;
+    font-family: "Poppins", sans-serif;
+    font-weight: 500;
+    display: flex;
+    justify-content: space-between;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses .woocommerce-Address .woocommerce-Address-title::before,
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses .woocommerce-Address .woocommerce-Address-title::after {
+    display: none;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses .woocommerce-Address .woocommerce-Address-title a {
+    background: black;
+    color: white;
+    font-size: 16px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    position: absolute;
+    bottom: 15px;
+    right: 15px;
+    font-weight: 500;
+}
+
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses .woocommerce-Address address {
+    margin: 10px 0px 15px 0px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form h2 {
+    font-family: "Poppins", sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields .woocommerce-address-fields__field-wrapper p.form-row {
+    padding: 0px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields .woocommerce-address-fields__field-wrapper p.form-row.form-row-first,
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields .woocommerce-address-fields__field-wrapper p.form-row.form-row-last {
+    width: 49%;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields .woocommerce-address-fields__field-wrapper p.form-row label {
+    font-family: "Poppins", sans-serif;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields .woocommerce-address-fields__field-wrapper p.form-row span.woocommerce-input-wrapper input {
+    border: 1px solid black;
+    border-radius: 6px;
+    outline: none;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields p button {
+    background: black;
+    color: white;
+    border-radius: 6px;
+    margin-top: 10px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p.woocommerce-form-row label {
+    font-family: "Poppins", sans-serif;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p.woocommerce-form-row input {
+    border: 1px solid black;
+    border-radius: 6px;
+    outline: none;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p.woocommerce-form-row {
+    padding: 0px;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p.woocommerce-form-row.form-row-first,
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p.woocommerce-form-row.form-row-last {
+    width: 49%;
+}
+
+body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p .woocommerce-Button {
+    background: black;
+    color: white;
+    border-radius: 6px;
+    margin-top: 10px;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce {
+    flex-direction: column;
+    max-width: 750px;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce .woocommerce-notices-wrapper {
+    display: block;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce h2 {
+    font-family: "Poppins", sans-serif;
+    font-size: 24px;
+    font-weight: 700;
+    text-transform: uppercase;
+    margin-bottom: 15px;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-login {
+    margin: 0px;
+    background: #fff;
+    padding: 35px;
+    border-radius: 12px;
+    height: calc(100% - 60px);
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-register p {
+    font-size: 16px;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce .u-columns {
+    display: flex;
+    gap: 20px;
+}
+
+.woocommerce form.woocommerce-form-login .form-row {
+    margin-bottom: 20px;
+    padding: 0;
+    margin-top: 20px;
+}
+
+.woocommerce form.woocommerce-form-login .form-row span {
+    font-size: 14px;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-login p.form-row label {
+    font-family: "Poppins", sans-serif;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-login p.form-row input {
+    border: 1px solid black;
+    border-radius: 6px;
+    outline: none;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-login p.form-row button.woocommerce-form-login__submit {
+    background: black;
+    color: white;
+    border-radius: 6px;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-register {
+    margin: 0px;
+    background: #fff;
+    padding: 35px;
+    border-radius: 12px;
+    height: calc(100% - 60px);
+}
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-register .woocommerce-privacy-policy-text a {
+    text-decoration: underline;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-register p.form-row label {
+    font-family: "Poppins", sans-serif;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-register p.form-row input {
+    border: 1px solid black;
+    border-radius: 6px;
+    outline: none;
+}
+
+body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-register button.woocommerce-form-register__submit {
+    background: black;
+    color: white;
+    border-radius: 6px;
+    margin-top: 10px;
+}
+
+@media all and (max-width: 1200px) {
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content {
+        padding: 30px;
+    }
+}
+
+@media all and (max-width: 1024px) {
+    body.woocommerce-account .main .woocommerce {
+        flex-direction: column;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation {
+        width: 100%;
+        overflow-x: scroll;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation ul {
+        flex-direction: row;
+        gap: 20px;
+        overflow-x: scroll;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation ul li.is-active {
+        background: none;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation ul li a {
+        padding: 0px;
+        white-space: nowrap;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-info {
+        margin: 0px;
+    }
+}
+
+@media all and (max-width: 768px) {
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-navigation ul li a {
+        font-size: 16px;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content {
+        padding: 20px;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content table.woocommerce-orders-table tbody td.woocommerce-orders-table__cell-order-date {
+        border: none;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-order-details h2.woocommerce-order-details__title,
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-customer-details h2.woocommerce-column__title {
+        font-size: 20px;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-info {
+        padding: 15px 15px 15px 40px;
+        flex-direction: column;
+        align-items: start;
+        gap: 10px;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-info::before {
+        left: 15px;
+        transform: inherit;
+        top: 15px;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses {
+        flex-direction: column;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content .woocommerce-Addresses .woocommerce-Address {
+        width: 100%;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form h2 {
+        font-size: 20px;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields .woocommerce-address-fields__field-wrapper p.form-row.form-row-first,
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields .woocommerce-address-fields__field-wrapper p.form-row.form-row-last {
+        width: 100%;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form .woocommerce-address-fields .woocommerce-address-fields__field-wrapper p.form-row label {
+        font-size: 16px;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p.woocommerce-form-row label {
+        font-size: 16px;
+    }
+
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p.woocommerce-form-row.form-row-first,
+    body.woocommerce-account .main .woocommerce .woocommerce-MyAccount-content form.edit-account p.woocommerce-form-row.form-row-last {
+        width: 100%;
+    }
+
+    body.woocommerce-account.no-logged-in-user .main .woocommerce h2 {
+        font-size: 20px;
+    }
+
+    body.woocommerce-account.no-logged-in-user .main .woocommerce form.woocommerce-form-login p.form-row label {
+        font-size: 16px;
+    }
+
+    body.woocommerce-account.no-logged-in-user .main .woocommerce .u-columns {
+        flex-direction: column;
+        gap: 40px;
+    }
+
+}
+
+
+/* Account Screen Styling */
+
+body.woocommerce-dashboard {
+	font-family: "Quicksand", sans-serif;
+}
+
+body.woocommerce-dashboard .main {
+	padding: 0px 20px;
+}
+
+body.woocommerce-dashboard .woocommerce nav ul {
+	display: flex;
+	flex-direction: column;
+	gap: 20px;
+}
+
+#buy-again-panel .added_to_cart.wc-forward {
+    display: none !important;
+}

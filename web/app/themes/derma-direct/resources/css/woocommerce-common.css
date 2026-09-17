@@ -1,0 +1,39 @@
+.added_to_cart.wc-forward {
+    display: none !important;
+}
+
+/* Scrollbar Width */
+.filters-scroll-bar::-webkit-scrollbar {
+    width: 8px;
+}
+
+/* Scrollbar Track */
+.filters-scroll-bar::-webkit-scrollbar-track {
+    background: #e6e6e6;
+    border-radius: 10px;
+}
+
+/* Scrollbar Thumb */
+.filters-scroll-bar::-webkit-scrollbar-thumb {
+    background: #bdbbbbff;
+    border-radius: 10px;
+}
+
+/* Scrollbar Width */
+.filters-wrapper-scroll-bar::-webkit-scrollbar {
+    width: 8px;
+}
+
+/* Scrollbar Track */
+.filters-wrapper-scroll-bar::-webkit-scrollbar-track {
+    background: #e6e6e6;
+    border-radius: 10px;
+}
+
+/* Scrollbar Thumb */
+.filters-wrapper-scroll-bar::-webkit-scrollbar-thumb {
+    background: #bdbbbbff;
+    border-radius: 10px;
+}
+
+

@@ -1,0 +1,148 @@
+.cf7-popup-overlay {
+    display: none;
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 9999;
+    justify-content: center;
+    align-items: center;
+  }
+
+  .cf7-popup-overlay.active {
+    display: flex;
+  }
+
+  .cf7-popup-box {
+    background: #fff;
+    padding: 35px;
+    border-radius: 10px;
+    max-width: 800px;
+    width: 90%;
+    max-height: 90vh;
+    overflow-y: auto;
+    position: relative;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    animation: cf7-popup-fade 0.25s ease;
+  }
+
+  @keyframes cf7-popup-fade {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  .cf7-popup-close {
+    position: absolute;
+    top: 12px;
+    right: 18px;
+    font-size: 26px;
+    font-weight: bold;
+    color: #555;
+    cursor: pointer;
+    line-height: 1;
+  }
+
+  .cf7-popup-close:hover {
+    color: #000;
+  }
+
+  /* ===== Form field styling ===== */
+  .training-partner-form-wrapper {
+    font-family: Quicksand;
+  }
+
+  .training-partner-form-wrapper .form-row {
+    margin-bottom: 10px;
+  }
+
+  .training-partner-form-wrapper label {
+    display: block;
+    font-size: 15px;
+    font-weight: 500;
+    color: #222;
+    margin-bottom: 8px;
+  }
+
+  .training-partner-form-wrapper .req-star {
+    color: #e00000;
+  }
+
+  .training-partner-form-wrapper input[type="text"],
+  .training-partner-form-wrapper input[type="email"],
+  .training-partner-form-wrapper input[type="tel"],
+  .training-partner-form-wrapper textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 12px 14px;
+    font-size: 15px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    color: #333;
+    background: #fff;
+  }
+
+.training-partner-form-wrapper textarea {
+  height: 70px;
+  min-height: 60px;
+  max-height: 60px;
+  overflow-y: auto;
+  resize: none;
+}
+
+  .training-partner-form-wrapper input:focus,
+  .training-partner-form-wrapper textarea:focus {
+    outline: none;
+    border-color: #999;
+  }
+
+  .training-partner-form-wrapper input::placeholder,
+  .training-partner-form-wrapper textarea::placeholder {
+    color: #999;
+  }
+
+  .training-partner-form-wrapper .training-form-acceptance {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 14px;
+    color: #333;
+  }
+
+  .training-partner-form-wrapper .wpcf7-acceptance .wpcf7-list-item {
+    margin: 0;
+  }
+
+  .training-partner-form-wrapper .wpcf7-acceptance label {
+    display: flex;
+    align-items: flex-start;
+    font-weight: 400;
+    font-size: 14px;
+    gap: 8px;
+    margin-bottom: 0;
+  }
+
+  .training-partner-form-wrapper input[type="checkbox"] {
+    margin-top: 3px;
+  }
+
+  .training-partner-form-wrapper .submit-btn {
+    margin-top: 8px;
+  }
+
+  .training-partner-form-wrapper input[type="submit"] {
+    width: 100%;
+    background-color: #000;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 14px 0;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  .training-partner-form-wrapper input[type="submit"]:hover {
+    background-color: #222;
+  }

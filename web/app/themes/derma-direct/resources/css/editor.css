@@ -1,0 +1,14 @@
+@import "./app.css" important;
+
+.block-editor-block-list__layout.is-root-container > :where(:not(.alignleft):not(.alignright):not(.alignfull)),
+.editor-visual-editor__post-title-wrapper > :where(:not(.alignleft):not(.alignright):not(.alignfull)) {
+    max-width: none !important;
+}
+
+.wp-block {
+    margin: 0 !important;
+
+    h1, h2, h3, h4, h5, h6, p, ul {
+        margin: 0;
+    }
+}

@@ -1,0 +1,28 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Composer
+/vendor/
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# WordPress runtime
+web/app/uploads/
+web/app/cache/
+web/app/upgrade/
+web/app/plugins/*
+/web/app/themes/derma-direct/vendor/
+/web/app/themes/derma-direct/node_modules/
+
+# WordPress core managed by Bedrock
+web/wp/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

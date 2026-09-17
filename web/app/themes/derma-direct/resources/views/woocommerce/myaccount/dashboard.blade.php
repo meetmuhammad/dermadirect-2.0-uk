@@ -1,0 +1,7 @@
+@include('woocommerce.myaccount.partials.overview-cards')
+@include('woocommerce.myaccount.partials.quick-actions')
+@include('woocommerce.myaccount.partials.buy-again')
+@include('woocommerce.myaccount.partials.recent-orders')
+@include('woocommerce.myaccount.partials.order-status')
+@include('woocommerce.myaccount.partials.notifications')
+@include('woocommerce.myaccount.partials.recommended-products')

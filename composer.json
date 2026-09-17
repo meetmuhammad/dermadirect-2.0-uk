@@ -1,0 +1,109 @@
+{
+  "name": "roots/bedrock",
+  "type": "project",
+  "license": "MIT",
+  "description": "WordPress boilerplate with Composer, easier configuration, and an improved folder structure",
+  "homepage": "https://roots.io/bedrock/",
+  "authors": [
+    {
+      "name": "Scott Walkinshaw",
+      "email": "scott.walkinshaw@gmail.com",
+      "homepage": "https://github.com/swalkinshaw"
+    },
+    {
+      "name": "Ben Word",
+      "email": "ben@benword.com",
+      "homepage": "https://github.com/retlehs"
+    }
+  ],
+  "keywords": [
+    "bedrock", "composer", "roots", "wordpress", "wp", "wp-config"
+  ],
+  "support": {
+    "issues": "https://github.com/roots/bedrock/issues",
+    "forum": "https://discourse.roots.io/category/bedrock"
+  },
+  "repositories": [
+    {
+      "name": "wpackagist",
+      "type": "composer",
+      "url": "https://wpackagist.org"
+    },
+    {
+      "type": "composer",
+      "url": "https://wpackagist.org",
+      "only": ["wpackagist-plugin/*", "wpackagist-theme/*"]
+    },
+    {
+      "type":"composer",
+      "url":"https://connect.advancedcustomfields.com"
+    },
+    {
+      "type": "composer",
+      "url": "https://wpackagist.org",
+      "only": [
+        "wpackagist-plugin/*"
+      ]
+    },
+    {
+      "type": "composer",
+      "url": "https://composer.octolize.dev",
+      "only": ["octolize-plugin/*"]
+    }
+  ],
+  "require": {
+    "php": ">=8.1",
+    "composer/installers": "^2.2",
+    "vlucas/phpdotenv": "^5.5",
+    "oscarotero/env": "^2.1",
+    "roots/bedrock-autoloader": "^1.0",
+    "roots/bedrock-disallow-indexing": "^2.0",
+    "roots/wordpress": "^6.9",
+    "roots/wp-config": "1.0.0",
+    "wpackagist-plugin/woocommerce": "^11.0.1",
+    "wpackagist-plugin/megamenu": "^3.6",
+    "wpackagist-plugin/contact-form-7": "^6.1",
+    "wpackagist-plugin/updraftplus": "^1.26",
+    "wpackagist-plugin/woo-discount-rules": "^2.6",
+    "wpackagist-plugin/flexible-shipping": "^6.5",
+    "wpackagist-plugin/google-listings-and-ads": "^3.5",
+    "wpackagist-plugin/livechat-woocommerce": "^5.0",
+    "wpackagist-plugin/omnisend-connect": "^1.18",
+    "wpackagist-plugin/woo-stripe-payment": "^4.0",
+    "wpackagist-plugin/wt-smart-coupons-for-woocommerce": "^2.2",
+    "wpackagist-plugin/woocommerce-stock-manager": "^3.7",
+    "wpackagist-plugin/trackship-for-woocommerce": "^2.0.1",
+    "wpackagist-plugin/print-invoices-packing-slip-labels-for-woocommerce": "^4.9",
+    "wpackagist-plugin/woocommerce-gateway-stripe": "^10.4",
+    "wpackagist-plugin/generateblocks": "^2.2",
+    "wpackagist-plugin/woo-advanced-shipment-tracking": "^4.0",
+    "wpackagist-plugin/woocommerce-currency-switcher": "^1.4",
+    "wpackagist-plugin/ajax-search-for-woocommerce": "^1.34"
+  },
+  "require-dev": {
+    "roave/security-advisories": "dev-latest",
+    "laravel/pint": "^1.18"
+  },
+  "config": {
+    "optimize-autoloader": true,
+    "preferred-install": "dist",
+    "allow-plugins": {
+      "composer/installers": true,
+      "roots/wordpress-core-installer": true
+    }
+  },
+  "minimum-stability": "dev",
+  "prefer-stable": true,
+  "extra": {
+    "installer-paths": {
+      "web/app/mu-plugins/{$name}/": ["type:wordpress-muplugin"],
+      "web/app/plugins/{$name}/": ["type:wordpress-plugin"],
+      "web/app/themes/{$name}/": ["type:wordpress-theme"]
+    },
+    "wordpress-install-dir": "web/wp"
+  },
+  "scripts": {
+    "lint": "pint --test",
+    "lint:fix": "pint"
+  }
+}

@@ -1,0 +1,1 @@
+document.addEventListener("DOMContentLoaded",function(){const n=document.querySelectorAll(".subscribe-newsletter-btn"),t=document.querySelector(".newsletter-modal"),e=document.querySelector(".close-popup");n.forEach(c=>{c.addEventListener("click",function(){t.classList.remove("hidden")})}),e==null||e.addEventListener("click",function(){t.classList.add("hidden")})});

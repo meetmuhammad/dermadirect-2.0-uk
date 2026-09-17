@@ -1,0 +1,337 @@
+/**
+ * Order Filters Admin Styles
+ * Modal popup design with applied filters pills
+ */
+
+/* Applied Filters Pills */
+.applied-filters-container {
+    margin: 10px 0;
+}
+
+.applied-filters-pills {
+    background: #f9f9f9;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.applied-filters-label {
+    font-weight: 600;
+    color: #1d2327;
+    margin-right: 5px;
+}
+
+.filter-pill {
+    background: #2271b1;
+    color: #fff;
+    padding: 4px 8px;
+    border-radius: 12px;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.filter-pill .remove-filter {
+    background: none;
+    border: none;
+    color: #fff;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.filter-pill .remove-filter:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.clear-all-filters-btn {
+    margin-left: auto !important;
+}
+
+/* Modal Overlay */
+.order-filters-modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 999999;
+    display: none;
+}
+
+.order-filters-modal-overlay.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Modal */
+.order-filters-modal {
+    background: #fff;
+    border-radius: 8px;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+    max-width: 800px;
+    width: 90%;
+    max-height: 80vh;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Modal Header */
+.order-filters-modal-header {
+    background: #f1f1f1;
+    padding: 15px 20px;
+    border-bottom: 1px solid #ddd;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.order-filters-modal-header h3 {
+    margin: 0;
+    font-size: 18px;
+    color: #1d2327;
+}
+
+.order-filters-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    cursor: pointer;
+    color: #666;
+    width: 30px;
+    height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+}
+
+.order-filters-close:hover {
+    background: #e0e0e0;
+    color: #000;
+}
+
+/* Modal Body */
+.order-filters-modal-body {
+    padding: 20px;
+    max-height: 60vh;
+    overflow-y: auto;
+}
+
+.order-filters-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 20px;
+}
+
+/* Filter columns */
+.filter_column {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+/* Individual filter blocks */
+.order_block_wrapper {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.order_block_wrapper label {
+    font-weight: 600;
+    color: #1d2327;
+    font-size: 13px;
+}
+
+/* Form controls */
+.order_block_wrapper input[type="text"],
+.order_block_wrapper input[type="number"],
+.order_block_wrapper input[type="date"],
+.order_block_wrapper select {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #8c8f94;
+    border-radius: 3px;
+    font-size: 13px;
+    line-height: 1.4;
+    background-color: #fff;
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.07);
+}
+
+.order_block_wrapper input:focus,
+.order_block_wrapper select:focus {
+    border-color: #2271b1;
+    box-shadow: 0 0 0 1px #2271b1;
+    outline: 2px solid transparent;
+}
+
+/* Multi-select dropdowns */
+.order_statuses_select {
+    height: auto !important;
+    min-height: 80px;
+}
+
+/* Date range styling */
+.date_range {
+    display: flex;
+    gap: 8px;
+    flex-direction: column;
+}
+
+.date_range input {
+    flex: 1;
+}
+
+@media (min-width: 768px) {
+    .date_range {
+        flex-direction: row;
+    }
+}
+
+/* Order total range styling */
+.order_total_range {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.order_total_range label {
+    font-size: 12px;
+    margin: 0;
+    color: #646970;
+}
+
+.order_total_range input {
+    flex: 1;
+}
+
+@media (min-width: 768px) {
+    .order_total_range {
+        flex-direction: row;
+        align-items: center;
+    }
+
+    .order_total_range label {
+        min-width: 40px;
+    }
+}
+
+/* Modal Footer */
+.order-filters-modal-footer {
+    background: #f9f9f9;
+    padding: 15px 20px;
+    border-top: 1px solid #ddd;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+.order-filters-modal-footer .button {
+    padding: 6px 12px;
+    font-size: 13px;
+    border-radius: 3px;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-block;
+    line-height: 1.4;
+}
+
+.order-filters-modal-footer .button-primary {
+    background: #2271b1;
+    border: 1px solid #2271b1;
+    color: #fff;
+}
+
+.order-filters-modal-footer .button-primary:hover {
+    background: #135e96;
+    border-color: #135e96;
+}
+
+.order-filters-modal-footer .button:not(.button-primary) {
+    background: #f6f7f7;
+    border: 1px solid #dcdcde;
+    color: #2c3338;
+}
+
+.order-filters-modal-footer .button:not(.button-primary):hover {
+    background: #f0f0f1;
+    border-color: #8c8f94;
+}
+
+/* Additional Filters button */
+#show_order_filters {
+    margin-left: 10px;
+}
+
+/* Loading state */
+.order-filters-modal.loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+/* Error states */
+.order_block_wrapper input.error,
+.order_block_wrapper select.error {
+    border-color: #d63638;
+    box-shadow: inset 0 1px 2px rgba(214, 54, 56, 0.2);
+}
+
+/* Success states */
+.order_block_wrapper input.success,
+.order_block_wrapper select.success {
+    border-color: #00a32a;
+    box-shadow: inset 0 1px 2px rgba(0, 163, 42, 0.2);
+}
+
+/* Responsive design */
+@media (max-width: 782px) {
+    .order-filters-modal {
+        width: 95%;
+        max-height: 90vh;
+    }
+
+    .order-filters-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .order-filters-modal-footer {
+        flex-direction: column;
+    }
+
+    .order-filters-modal-footer .button {
+        width: 100%;
+        text-align: center;
+    }
+
+    .applied-filters-pills {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+
+    .clear-all-filters-btn {
+        margin-left: 0 !important;
+        margin-top: 10px;
+    }
+}
+
+.post-type-product .tablenav .actions,
+.post-type-shop_order .tablenav .actions,
+.woocommerce_page_wc-customer-stock-notifications .tablenav .actions,
+.woocommerce_page_wc-orders .tablenav .actions {
+    display: flex;
+}

@@ -1,0 +1,19 @@
+.testimonial-slider {
+    position: relative;
+}
+
+.swiper-button-next,
+.swiper-button-prev {
+    color: #000 !important;
+    background: #ececec !important;
+    width: 40px !important;
+    height: 40px !important;
+    border: 1px solid #e1e8ed !important;
+    border-radius: 50% !important;
+}
+
+.swiper-button-next:after,
+.swiper-button-prev:after {
+    font-size: 14px !important;
+    font-weight: bold !important;
+}
