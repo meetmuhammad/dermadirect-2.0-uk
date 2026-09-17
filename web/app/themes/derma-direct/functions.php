@@ -216,6 +216,7 @@ add_action('init', function(){
 //     wp_safe_redirect(home_url('/coming-soon'));
 //     exit;
 // });
+//
 
 /**
  * Cap max purchase quantity at 50 (or actual stock if lower) to prevent stock leak.
