@@ -19,7 +19,7 @@
     "isEntry": true
   },
   "resources/css/app.css": {
-    "file": "assets/app-tVYE5ymD.css",
+    "file": "assets/app-5I18KdKm.css",
     "src": "resources/css/app.css",
     "isEntry": true
   },
@@ -74,7 +74,7 @@
     "isEntry": true
   },
   "resources/css/editor.css": {
-    "file": "assets/editor-DBHzT66C.css",
+    "file": "assets/editor-DgFG-1bg.css",
     "src": "resources/css/editor.css",
     "isEntry": true
   },
@@ -453,7 +453,7 @@
     "isEntry": true
   },
   "resources/js/product-archive.js": {
-    "file": "assets/product-archive-Dau0zufW.js",
+    "file": "assets/product-archive-E8ZUHshZ.js",
     "name": "product-archive",
     "src": "resources/js/product-archive.js",
     "isEntry": true

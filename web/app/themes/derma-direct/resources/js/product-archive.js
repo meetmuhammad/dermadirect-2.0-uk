@@ -1,3 +1,18 @@
+window.addEventListener('pageshow', (event) => {
+    if (event.persisted && typeof ajax_obj !== 'undefined') {
+        fetch(ajax_obj.ajax_url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: new URLSearchParams({ action: 'refresh_ajax_nonce' }),
+        })
+            .then(res => res.json())
+            .then(data => {
+                if (data?.data?.nonce) ajax_obj.nonce = data.data.nonce;
+            })
+            .catch(() => {});
+    }
+});
+
 document.addEventListener('DOMContentLoaded', () => {
 
     /**
@@ -73,6 +88,40 @@ document.addEventListener('DOMContentLoaded', () => {
         let currentProductType = [];
         let currentProductProtocols = [];
 
+        async function fetchWithNonceRetry(params) {
+            let response = await fetch(ajax_obj.ajax_url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: params,
+            });
+
+            if (response.status === 403) {
+                try {
+                    const refreshRes = await fetch(ajax_obj.ajax_url, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: new URLSearchParams({ action: 'refresh_ajax_nonce' }),
+                    });
+                    const refreshData = await refreshRes.json();
+                    const freshNonce = refreshData?.data?.nonce;
+
+                    if (freshNonce) {
+                        ajax_obj.nonce = freshNonce;
+                        params.set('nonce', freshNonce);
+                        response = await fetch(ajax_obj.ajax_url, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                            body: params,
+                        });
+                    }
+                } catch (refreshErr) {
+                    console.error('Nonce refresh failed:', refreshErr);
+                }
+            }
+
+            return response;
+        }
+
         async function loadProducts(page = 1, sort = '', categories = [], brands = [], treatmentAreas = [], ingredients = [], productGauge = [], productLength = [], productType = [], productProtocols = []) {
 
             btn.disabled = true;
@@ -107,11 +156,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 productProtocols.forEach(p => params.append('product_protocols[]', p));
 
-                const response = await fetch(ajax_obj.ajax_url, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: params,
-                });
+                const response = await fetchWithNonceRetry(params);
 
                 const data = await response.json();
 
@@ -258,6 +303,9 @@ document.addEventListener('DOMContentLoaded', () => {
                         ? `(${selectedBrands.length})`
                         : '';
                 }
+
+                // Move the newly selected brand to the top of the list
+                refreshBrandFilterOrder();
             });
         });
     }
@@ -431,26 +479,6 @@ document.addEventListener('DOMContentLoaded', () => {
         if (countEl) countEl.innerHTML = `(${checkedBrands.length})`;
     }
 
-    function normalizeCategoryList() {
-        const items = Array.from(document.querySelectorAll('.category-filter-option'));
-        const parent = items[0]?.parentElement;
-        if (!parent) return;
-
-        const active = [];
-        const inactive = [];
-
-        items.forEach(el => {
-            const isActive = el.querySelector('a.active');
-            if (isActive) {
-                active.push(el);
-            } else {
-                inactive.push(el);
-            }
-        });
-
-        [...active, ...inactive].forEach(el => parent.appendChild(el));
-    }
-
     function applyCategoryVisibility(expanded = false) {
         const button = document.querySelector('#see_more_categories');
         const items = Array.from(document.querySelectorAll('.category-filter-option'));
@@ -475,8 +503,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const defaultExpanded = false;
 
-        normalizeCategoryList();
-
         applyCategoryVisibility(defaultExpanded);
 
         button.addEventListener('click', () => {
@@ -486,49 +512,60 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
 
-    function seeMoreBrandFilterList() {
+    function getBrandFilterList() {
         const button = document.querySelector('#see_more_brands');
-        if (!button) return;
+        const list = button ? button.previousElementSibling : document.querySelector('.brand-filter-option-item')?.parentElement;
+        return { button, list };
+    }
 
-        const defaultQty = parseInt(button.getAttribute('data-default-qty') ?? 4);
-        const list = button.previousElementSibling;
-
+    function reorderBrandFilterList() {
+        const { list } = getBrandFilterList();
         if (!list) return;
 
-        function getItems() {
-            return Array.from(list.querySelectorAll('.brand-filter-option'));
-        }
+        const items = Array.from(list.querySelectorAll('.brand-filter-option-item'));
+        const active = items.filter(el => el.querySelector('.brand-filter-option')?.checked);
+        const inactive = items.filter(el => !el.querySelector('.brand-filter-option')?.checked);
 
-        function reorder(items) {
-            const active = items.filter(el => el.querySelector('a.active'));
-            const inactive = items.filter(el => !el.querySelector('a.active'));
+        [...active, ...inactive].forEach(el => list.appendChild(el));
+    }
 
-            [...active, ...inactive].forEach(el => list.appendChild(el));
-        }
+    function applyBrandFilterVisibility(expanded = false) {
+        const { button, list } = getBrandFilterList();
+        if (!button || !list) return;
 
-        function apply(expanded = false) {
-            const items = getItems();
+        const defaultQty = parseInt(button.getAttribute('data-default-qty') ?? 4);
+        const items = Array.from(list.querySelectorAll('.brand-filter-option-item'));
 
-            reorder(items);
+        items.forEach((el, index) => {
+            if (expanded) {
+                el.classList.remove('!hidden');
+            } else {
+                el.classList.toggle('!hidden', index >= defaultQty);
+            }
+        });
 
-            const ordered = getItems();
+        button.innerText = expanded ? 'See less' : 'See more';
+    }
 
-            ordered.forEach((el, index) => {
-                if (expanded) {
-                    el.classList.remove('!hidden');
-                } else {
-                    el.classList.toggle('!hidden', index >= defaultQty);
-                }
-            });
+    // Re-runs the active-brand-first reorder, keeping the current expanded/collapsed state.
+    function refreshBrandFilterOrder() {
+        const { button } = getBrandFilterList();
+        const expanded = button ? button.innerText === 'See less' : true;
 
-            button.innerText = expanded ? 'See less' : 'See more';
-        }
+        reorderBrandFilterList();
+        applyBrandFilterVisibility(expanded);
+    }
 
-        setTimeout(() => apply(false), 0);
+    function seeMoreBrandFilterList() {
+        const { button, list } = getBrandFilterList();
+        if (!button || !list) return;
+
+        reorderBrandFilterList();
+        applyBrandFilterVisibility(false);
 
         button.addEventListener('click', () => {
             const isExpand = button.innerText === 'See more';
-            apply(isExpand);
+            applyBrandFilterVisibility(isExpand);
         });
     }
 
