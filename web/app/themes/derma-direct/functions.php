@@ -77,6 +77,7 @@ add_action('init', function(){
 
 });
 
+if (! function_exists('get_pagination')) {
 function get_pagination($query) {
     $paged = (get_query_var('paged')) ? get_query_var('paged') : 1;
     $total = $query->max_num_pages;
@@ -115,6 +116,7 @@ function get_pagination($query) {
     }
 
     return $html;
+}
 }
 
 //Cron Job for Best_selling _count_sorting
