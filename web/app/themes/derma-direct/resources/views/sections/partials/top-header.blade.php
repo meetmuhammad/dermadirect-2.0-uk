@@ -1,6 +1,6 @@
 <div class="bg-[#fafafa] top-header border-b border-grey-outline section-wrapper-padding py-[9px] hidden lg-up:block" aria-label="Top header section">
     <div class="container">
-        <div class="flex justify-between items-center gap-2 md:gap-4">
+        <div class="flex justify-between items-center gap-2 md:gap-4 relative">
             @unless (empty($top_menu_items ?? []))
                 <nav class="header-top-menu hidden lg-up:block" role="navigation" aria-label="Top navigation menu">
                     <ul class="flex items-center gap-1 lg:gap-2 text-secondary-grey text-xs lg-up:!text-sm font-lato leading-none md:mr-auto">
@@ -26,7 +26,7 @@
             @endunless
 
             @unless (empty($top_banner_text ?? ''))
-                <p class="lg:w-[160px] lg:w-auto text-secondary-black text-xs lg-up:!text-sm font-[700] text-center leading-none hidden lg-up:block font-lato" aria-label="Top banner text">
+                <p class="absolute left-1/2 -translate-x-1/2 lg:w-[160px] lg:w-auto text-secondary-black text-xs lg-up:!text-sm font-[700] text-center leading-none hidden lg-up:block font-lato" aria-label="Top banner text">
                     {{ $top_banner_text }}
                 </p>
             @endunless

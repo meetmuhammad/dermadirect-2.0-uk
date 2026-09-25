@@ -89,7 +89,7 @@
                                         <h4 class="text-[#6D6D6D] text-sm font-poppins font-[600] lg:tracking-[-0.3px]">
                                             {{ $filter['title'] }}
                                         </h4>
-                                        <span id="selected_brands_count" class="text-secondary-grey text-sm"></span>
+                                       {{-- <span id="selected_brands_count" class="text-secondary-grey text-sm"></span>--}}
                                     </div>
                                 </div>
 
@@ -109,30 +109,32 @@
 
                                             <li
                                                 @class([
-                                                    '[&_a.active]:bg-primary [&_a.active]:border-primary [&_a.active]:text-white [&_a.active_span]:border-white font-semibold',
-                                                    'brand-filter-option cursor-pointer hover:bg-primary/80 hover:text-white',
+                                                    'group has-[:checked]:bg-primary has-[:checked]:border-primary has-[:checked]:text-white font-semibold',
+                                                    'brand-filter-option-item cursor-pointer hover:bg-primary/80 hover:text-white',
                                                     'border border-[#F2F3F4] bg-white rounded',
                                                     '!hidden' => ($index ?? 0) > 4,
                                                 ])
                                             >
-                                            <a
-                                                href="{{ esc_url('/brand/' . $item_slug) }}"
-                                                @class([
-                                                    'flex items-center justify-between py-[14px] px-5',
-                                                    'active' => ($item_slug && in_array($item_slug, $active_brands ?? [])),
-                                                ])
-                                            >
+                                            <label class="flex items-center justify-between py-[14px] px-5 cursor-pointer">
+                                                <input
+                                                    type="checkbox"
+                                                    class="brand-filter-option hidden"
+                                                    value="{{ esc_attr($item_slug) }}"
+                                                    @checked($is_active)
+                                                />
+
                                                 <span>{{ $item_name }}</span>
 
                                                 <span
                                                     @class([
                                                         'size-[22px] bg-white border rounded-full flex items-center justify-center text-[12px] text-[#253D4E]',
                                                         'border-grey-outline',
+                                                        'group-has-[:checked]:border-white',
                                                     ])
                                                 >
                                                     {{ $item_count }}
                                                 </span>
-                                            </a>
+                                            </label>
                                         </li>
 
                                     @endforeach

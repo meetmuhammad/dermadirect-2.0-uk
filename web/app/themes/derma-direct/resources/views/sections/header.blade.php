@@ -31,6 +31,15 @@
                         'menu_id'        => '',
                     ]) !!}
 
+                    {!! wp_nav_menu([
+                        'theme_location' => 'brands',
+                        'container'      => 'nav',
+                        'menu_class'     => 'all-brands-mega-menu',
+                        'fallback_cb'    => false,
+                        'items_wrap'     => '<ul role="menubar" class="%2$s">%3$s</ul>',
+                        'menu_id'        => '',
+                    ]) !!}
+
                     {{-- Main navigation menu --}}
                     @unless (empty($main_navigation_menu_items ?? []))
                         <nav
@@ -127,15 +136,6 @@
                             </ul>
                         </nav>
                     @endunless
-
-                    {!! wp_nav_menu([
-                        'theme_location' => 'brands',
-                        'container'      => 'nav',
-                        'menu_class'     => 'all-brands-mega-menu',
-                        'fallback_cb'    => false,
-                        'items_wrap'     => '<ul role="menubar" class="%2$s">%3$s</ul>',
-                        'menu_id'        => '',
-                    ]) !!}
 
                 </div>
 

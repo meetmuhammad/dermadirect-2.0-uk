@@ -13,6 +13,69 @@ class ProductArchive extends Composer
         'woocommerce.archive-product',
     ];
 
+    /**
+     * Category slugs to exclude from the sidebar category filter entirely.
+     */
+    private const EXCLUDED_CATEGORY_SLUGS = [
+        'courses',
+        'gift-vouchers',
+        'sale',
+        'bundles',
+        'prodermis%ef%b8%8f',
+    ];
+
+    /**
+     * Custom display order (by slug) for the sidebar category filter.
+     * Categories not listed here fall back to the end, in their default order.
+     */
+    private const CATEGORY_ORDER = [
+        'dermal-fillers',
+        'skin-boosters',
+        'polynucleotides',
+        'plla',
+        'fat-dissolve',
+        'microneedling',
+        'pdo-threads',
+        'skincare',
+        'needles-cannulas',
+        'consumables',
+        'ppe',
+        'accessories',
+        'jalupro-range',
+        'restylane-range',
+    ];
+
+    /**
+     * Custom display order (by slug) for the sidebar brand filter.
+     * Brands not listed here fall back to the end, in their default order.
+     */
+    private const BRAND_ORDER = [
+        'nexfill',
+        'dermaren',
+        'lumi-eyes',
+        'lumifil',
+        'prodermis',
+        'aurora',
+        'caragen',
+        'croma',
+        'dermastir',
+        'illuma',
+        'infini',
+        'jalupro',
+        'juvederm',
+        'juvelook',
+        'medisco',
+        'plinest',
+        'profhilo',
+        'promoitalia',
+        'rejuran',
+        'remed',
+        'restylane',
+        'revitrane',
+        'teoxane',
+        'vivacy',
+    ];
+
     public function override(): array
     {
         $this->enqueueAssets();
@@ -80,6 +143,27 @@ class ProductArchive extends Composer
             'hide_empty' => false,
         ]);
         if (is_wp_error($terms) || empty($terms)) return [];
+
+        // Remove categories excluded from this filter
+        $terms = array_filter($terms, function ($term) {
+            return !in_array($term->slug, self::EXCLUDED_CATEGORY_SLUGS, true);
+        });
+
+        // Apply custom display order, with the active category (if any) pinned first;
+        // unlisted categories fall back to the end. Done server-side so the active
+        // category is already at the top on first render, with no client-side reorder.
+        $order_lookup = array_flip(self::CATEGORY_ORDER);
+        usort($terms, function ($a, $b) use ($order_lookup, $category_id) {
+            $a_active = $category_id > 0 && $a->term_id === $category_id;
+            $b_active = $category_id > 0 && $b->term_id === $category_id;
+            if ($a_active !== $b_active) {
+                return $a_active ? -1 : 1;
+            }
+
+            $pos_a = $order_lookup[$a->slug] ?? PHP_INT_MAX;
+            $pos_b = $order_lookup[$b->slug] ?? PHP_INT_MAX;
+            return $pos_a <=> $pos_b;
+        });
 
         $categories = [];
 
@@ -518,7 +602,10 @@ class ProductArchive extends Composer
             'products'         => $result['products'],
             'per_page'         => $per_page,
             'products_found'   => $result['products_found'],
-            'brands'           => $category_id > 0 ? self::getBrandsForCategory($category_id) : get_terms(['taxonomy' => 'product_brand', 'hide_empty' => true]),
+            'brands'           => self::sortBrandsByCustomOrder(
+                $category_id > 0 ? self::getBrandsForCategory($category_id) : get_terms(['taxonomy' => 'product_brand', 'hide_empty' => true]),
+                $this->getActiveBrandSlugs()
+            ),
             'treatment_areas'  => self::getACFFieldCounts('treatment_areas', $category_id),
             'ingredients'      => self::getACFFieldCounts('ingredients', $category_id),
             'product_gauge'    => self::getACFFieldCounts('product_gauge', $category_id),
@@ -526,6 +613,35 @@ class ProductArchive extends Composer
             'product_type'     => self::getACFFieldCounts('product_type', $category_id),
             'product_protocols' => self::getACFFieldCounts('product_protocols', $category_id),
         ];
+    }
+
+    /**
+     * Sort brand terms into the custom display order, with any active brand
+     * (e.g. on a brand archive page) pinned first; unlisted brands fall back to the end.
+     *
+     * @param mixed $brands Array of WP_Term (or WP_Error)
+     * @param array $active_slugs Brand slugs to pin to the top
+     * @return array
+     */
+    private static function sortBrandsByCustomOrder($brands, array $active_slugs = []): array
+    {
+        if (is_wp_error($brands) || empty($brands)) return [];
+
+        $order_lookup = array_flip(self::BRAND_ORDER);
+
+        usort($brands, function ($a, $b) use ($order_lookup, $active_slugs) {
+            $a_active = in_array($a->slug, $active_slugs, true);
+            $b_active = in_array($b->slug, $active_slugs, true);
+            if ($a_active !== $b_active) {
+                return $a_active ? -1 : 1;
+            }
+
+            $pos_a = $order_lookup[$a->slug] ?? PHP_INT_MAX;
+            $pos_b = $order_lookup[$b->slug] ?? PHP_INT_MAX;
+            return $pos_a <=> $pos_b;
+        });
+
+        return $brands;
     }
 
     /**

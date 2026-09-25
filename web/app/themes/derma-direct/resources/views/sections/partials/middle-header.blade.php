@@ -42,13 +42,13 @@
                             role="group"
                             aria-label="Support center contact information"
                         >
-                            @if (!empty($training_button_link['url'] ?? '') && !empty($training_button_link['title'] ?? ''))
+                            {{-- @if (!empty($training_button_link['url'] ?? '') && !empty($training_button_link['title'] ?? ''))
                             <a class="flex gap-2 items-center text-sm sm:text-xl font-quicksand font-bold py-3 px-5 rounded-md leading-none flex-row-reverse bg-primary text-white [&_img]:brightness-0 [&_img]:invert !text-[12px] whitespace-nowrap"
                             href="{{ esc_url($training_button_link['url']) }}"
                             target="{{ esc_attr($training_button_link['target'] ?: '_self') }}">
                                 {!! wp_kses_post($training_button_link['title']) !!}
                             </a>
-                            @endif
+                            @endif --}}
                             @svg('images.headphone', 'size-4 md:size-6', ['aria-hidden' => 'true'])
                             <h4 class="flex flex-col font-quicksand text-secondary-black font-[700] leading-[1.2] text-sm sm:text-base md:text-lg lg-up:!text-xl leading-none">
                                 <a
