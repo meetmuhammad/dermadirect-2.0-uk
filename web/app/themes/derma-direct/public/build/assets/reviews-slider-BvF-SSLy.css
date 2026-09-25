@@ -1,1 +1,0 @@
-@keyframes scrollBackAndForthLeft{0%{transform:translate(0)}to{transform:translate(calc(-1 * var(--moveX)))}}@keyframes scrollBackAndForthRight{0%{transform:translate(calc(-1 * var(--moveX)))}to{transform:translate(0)}}.product-review-slider .swiper .swiper-slide{max-width:392px!important;max-height:331px!important}.product-review-slider .swiper{overflow:inherit!important}

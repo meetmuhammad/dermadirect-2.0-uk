@@ -1,1 +1,0 @@
-document.addEventListener("DOMContentLoaded",()=>{const e=document.querySelector(".video-play-button"),t=document.getElementById("derma_video_popup"),d=document.getElementById("derma_video_frame");!e||!t||!d||e.addEventListener("click",()=>{const o=e.getAttribute("data-video-url");t.classList.remove("hidden"),d.setAttribute("src",o+"?autoplay=1")})});
