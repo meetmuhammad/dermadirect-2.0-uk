@@ -142,8 +142,11 @@ if ($before) {
 }
 
 // 13. No side effects: no queued/sent external actions created since the rehearsal copy was taken
-$as = rows($db, "SELECT status, COUNT(*) n FROM `$dest`.wp_actionscheduler_actions WHERE last_attempt_gmt > '$since' OR scheduled_date_gmt > '$since' GROUP BY status");
-$check('no Action Scheduler work attempted during rehearsal (webhooks, emails, jobs)', !array_filter($as, fn ($r) => $r['status'] !== 'pending'), $as);
+// An action counts as executed only if it has an attempt timestamp in the window (status may be
+// complete/failed). Actions cancelled by neutralize.php were never attempted and are reported apart.
+$attempted = rows($db, "SELECT hook, status, COUNT(*) n FROM `$dest`.wp_actionscheduler_actions WHERE last_attempt_gmt > '$since' GROUP BY hook, status");
+$res['actions_cancelled_in_window'] = (int) one($db, "SELECT COUNT(*) FROM `$dest`.wp_actionscheduler_actions WHERE status='canceled' AND last_attempt_gmt < '1971-01-01' AND scheduled_date_gmt > '$since'");
+$check('no Action Scheduler work executed during rehearsal (webhooks, emails, jobs)', !$attempted, ['executed' => $attempted, 'cancelled_not_executed' => $res['actions_cancelled_in_window']]);
 $ok = !array_filter($res['checks'], fn ($c) => !$c['ok']);
 file_put_contents(report_dir() . '/reconcile-' . gmdate('Ymd\THis') . '.json', json_encode($res, JSON_PRETTY_PRINT));
 out($ok ? 'RECONCILE OK' : 'RECONCILE FAILED');

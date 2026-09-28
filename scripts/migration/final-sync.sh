@@ -141,7 +141,10 @@ apply|resume)
     shasum -a 256 -c "$BACKUP.sha256" >/dev/null && [ $(( $(date +%s) - $(stat -f %m "$BACKUP") )) -lt 21600 ] || { echo "backup $BACKUP missing, unverified or older than 6h"; exit 3; }
   fi
   [ "$CMD" = resume ] && echo "resuming: completed batches are already equal and will be skipped"
-  run sync.php apply $SRCARGS; pull_reports ;;
+  run sync.php apply $SRCARGS
+  # Idempotent: restores the real legacy domain in any legacy-owned value still carrying DevKinsta's
+  # local host (0 changes once clean). Staff, settings and content are outside its scope.
+  run restore-legacy-domain.php apply --dest="$DEST"; pull_reports ;;
 verify)
   if [ -n "$HOSTED" ]; then
     hwp "wc hpos sync --batch-size=500"; hwp "wc hpos verify_data --batch-size=1000 --order-types=shop_order,shop_order_refund" || true

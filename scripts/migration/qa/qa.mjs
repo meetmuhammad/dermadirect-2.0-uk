@@ -13,6 +13,7 @@ const BASE = args.base || 'http://localhost:8088';
 const ROOT = path.resolve(args.out || 'migration-reports/qa');
 const OUT = path.join(ROOT, args.label);
 fs.mkdirSync(OUT, { recursive: true });
+const ADMIN_ENV = args['admin-env'] || 'secrets/rehearsal-admin.env';
 const env = (f) => Object.fromEntries(fs.readFileSync(f, 'utf8').trim().split('\n').map((l) => l.split(/=(.*)/s).slice(0, 2)));
 
 const PUBLIC = [
@@ -32,9 +33,17 @@ const ADMIN = [
 
 const report = { label: args.label, base: BASE, at: new Date().toISOString(), pages: {}, blockedExternal: {}, links: {} };
 
+// --map=<origin>: serve BASE's host from a local origin (simulated hosted site). Nothing else leaves.
+const MAP = args.map || null;
+const BASEHOST = new URL(BASE).hostname;
 async function instrument(context) {
-  await context.route('**/*', (route) => {
-    const u = new URL(route.request().url());
+  await context.route('**/*', async (route) => {
+    const req = route.request();
+    const u = new URL(req.url());
+    if (MAP && u.hostname === BASEHOST) {
+      const resp = await route.fetch({ url: MAP + u.pathname + u.search, headers: await req.allHeaders(), maxRedirects: 0 }).catch(() => null);
+      return resp ? route.fulfill({ response: resp }) : route.abort('failed');
+    }
     if (['localhost', '127.0.0.1'].includes(u.hostname)) return route.continue();
     report.blockedExternal[u.hostname] = (report.blockedExternal[u.hostname] || 0) + 1;
     return route.abort('blockedbyclient');
@@ -127,7 +136,7 @@ try {
     await ctx.close();
   }
   // Admin
-  const a = env('secrets/rehearsal-admin.env');
+  const a = env(ADMIN_ENV);
   const actx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   await instrument(actx);
   const ap = await actx.newPage();
@@ -147,7 +156,7 @@ try {
   }
   // Customer (after sync): test account created on the source copy with a known password
   if (args.customer) {
-    const c = env('secrets/rehearsal-customer.env');
+    const c = env(args['customer-env'] || 'secrets/rehearsal-customer.env');
     const cctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     await instrument(cctx);
     const cp = await cctx.newPage();
@@ -172,7 +181,8 @@ try {
   const links = [...new Set(Object.values(report.pages).flatMap((p) => p.links || []))].filter((l) => !/wp-admin|logout|add-to-cart|\/feed|wp-login|\.(zip|pdf)$/.test(l)).slice(0, 250);
   const lctx = await browser.newContext();
   for (const l of links) {
-    const r = await lctx.request.get(l, { maxRedirects: 5, timeout: 60000 }).catch((e) => ({ status: () => 'ERR' }));
+    const target = MAP ? l.replace(new URL(BASE).origin, MAP) : l;
+    const r = await lctx.request.get(target, { maxRedirects: MAP ? 0 : 5, timeout: 60000 }).catch((e) => ({ status: () => 'ERR' }));
     report.links[l] = r.status();
   }
   await lctx.close();

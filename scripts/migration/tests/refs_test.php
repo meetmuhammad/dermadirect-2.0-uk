@@ -83,5 +83,12 @@ check('nested serialized string', rewrite_urls(serialize(['in' => serialize(['u'
 check('unrelated untouched', rewrite_urls('https://other.example/wp-content/themes/x.css', $pairs) === 'https://other.example/wp-content/themes/x.css');
 check('broken serialized refused', rewrite_urls('a:1:{s:3:"url";s:99:"https://legacy.local:8443/";}', $pairs) === null);
 
+// DevKinsta domain restoration (config common pair): full site URL wins, bare host restored
+$dk = url_pairs([['https://httpsdermadirectcom.local:8443', 'http://localhost:8088'], ['httpsdermadirectcom.local', 'dermadirect.co.uk']]);
+check('note author email restored', rewrite_urls('woocommerce@httpsdermadirectcom.local', $dk) === 'woocommerce@dermadirect.co.uk');
+check('full DevKinsta URL maps to destination, not to the legacy domain', rewrite_urls('https://httpsdermadirectcom.local:8443/shop/', $dk) === 'http://localhost:8088/shop/');
+check('serialized email restored with valid length', rewrite_urls(serialize(['from' => 'info@httpsdermadirectcom.local']), $dk) === serialize(['from' => 'info@dermadirect.co.uk']));
+check('authentic legacy value untouched', rewrite_urls('woocommerce@dermadirect.co.uk', $dk) === 'woocommerce@dermadirect.co.uk');
+
 echo $fails ? "\n$fails FAILED\n" : "\nALL PASSED\n";
 exit($fails ? 1 : 0);

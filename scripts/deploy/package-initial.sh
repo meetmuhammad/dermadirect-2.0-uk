@@ -25,7 +25,7 @@ sql -e "DELETE FROM $X.wp_usermeta WHERE user_id=47553; DELETE FROM $X.wp_users 
         DELETE FROM $X.wp_posts WHERE post_author=47553 AND post_status='auto-draft';
         UPDATE $X.wp_posts SET post_author=0 WHERE post_author=47553;
         DELETE FROM $X.wp_usermeta WHERE meta_key IN ('session_tokens');
-        DELETE FROM $X.wp_options WHERE option_name LIKE '\\_transient\\_%' OR option_name LIKE '\\_site\\_transient\\_%' OR option_name IN ('dd_safety_blocked_log');
+        DELETE FROM $X.wp_options WHERE option_name LIKE '\\_transient\\_%' OR option_name LIKE '\\_site\\_transient\\_%' OR option_name IN ('dd_safety_blocked_log','fs_active_plugins','wp_mail_smtp_email_sending_debug');
         TRUNCATE $X.wp_woocommerce_sessions;"
 for t in $(sql -e "SELECT table_name FROM information_schema.tables WHERE table_schema='$X' AND table_name LIKE 'dd\\_mig\\_h\\_%'"); do sql -e "DROP TABLE $X.\`$t\`"; done
 echo "== neutralise integrations"; $R neutralize.php apply --dest=$X
@@ -35,11 +35,26 @@ for t in $TABLES; do
   hit=$(sql -e "SELECT CONCAT('SELECT 1 FROM \`$X\`.\`$t\` WHERE ', GROUP_CONCAT(CONCAT('\`',column_name,'\` LIKE ''%$FROM%''') SEPARATOR ' OR '), ' LIMIT 1') FROM information_schema.columns WHERE table_schema='$X' AND table_name='$t' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext')" | sql)
   [ -n "$hit" ] && wpx search-replace "'$FROM'" "'$URL'" "$t" --all-tables --precise --report-changed-only | grep -E "Success|Error" | sed "s/^/   $t: /"
 done
-echo "== residual checks (must be empty)"
+echo "== residual checks"
+# STRICT (must be empty): legacy-owned commerce records carried by the migration.
+# REPORTED (allowed, listed in residuals-reported.tsv): pre-existing values in destination-owned
+# settings/content and in tables of legacy-only plugins the new site does not run (already on Kinsta).
+txtcols() { sql -e "SELECT GROUP_CONCAT(CONCAT('\`',column_name,'\` LIKE ''%$2%''') SEPARATOR ' OR ') FROM information_schema.columns WHERE table_schema='$X' AND table_name='$1' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext')"; }
+COMMERCE="SELECT ID FROM $X.wp_posts WHERE post_type IN ('shop_order','shop_order_refund','shop_coupon')"
+CUSTOMERS="SELECT user_id FROM $X.wp_usermeta WHERE meta_key='wp_capabilities' AND (meta_value LIKE '%\"customer\"%' OR meta_value LIKE '%\"blocked_customer\"%')"
+KEYED="wp_woocommerce_order_items wp_woocommerce_order_itemmeta wp_woocommerce_payment_tokens wp_woocommerce_payment_tokenmeta wp_webis_pbet wp_webis_pbet_order wp_webis_pbet_order_item wp_woocommerce_bis_notifications wp_woocommerce_bis_notificationsmeta wp_woocommerce_bis_activity wp_gens_raf wp_gens_rafmeta wp_gens_raf_guest_referrals wp_wt_sc_coupon_lookup wp_wdr_order_item_discounts wp_pp_order_actions_log wp_trackship_shipment wp_trackship_shipment_meta wp_zorem_email_sms_log wp_stock_log wp_wc_order_stats wp_wc_order_product_lookup wp_wc_order_tax_lookup wp_wc_order_coupon_lookup wp_wc_customer_lookup"
+: > "$OUT/residuals-reported.tsv"
 for needle in "$FROM" "localhost:8089" "httpsdermadirectcom.local" "/var/www/html" "DD-MIGRATION-TEST" "@example.invalid"; do
+  n=0
+  n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_posts WHERE ID IN ($COMMERCE) AND ($(txtcols wp_posts "$needle"))")))
+  n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_postmeta WHERE post_id IN ($COMMERCE) AND meta_value LIKE '%$needle%'")))
+  n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_comments WHERE comment_post_ID IN ($COMMERCE) AND ($(txtcols wp_comments "$needle"))")))
+  n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_users WHERE ID IN ($CUSTOMERS) AND ($(txtcols wp_users "$needle"))")))
+  n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_usermeta WHERE user_id IN ($CUSTOMERS) AND meta_value LIKE '%$needle%'")))
+  for t in $KEYED; do c=$(txtcols $t "$needle"); [ -n "$c" ] && [ "$c" != NULL ] && n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.\`$t\` WHERE $c"))); done
+  if [ "$n" -gt 0 ]; then echo "   STRICT RESIDUAL '$needle' in legacy-owned records: $n"; echo "$needle $n" >> "$OUT/residuals.txt"; else echo "   strict none: $needle"; fi
   Q=$(sql -e "SELECT GROUP_CONCAT(CONCAT('SELECT ''',table_name,'.',column_name,''' c, COUNT(*) n FROM \`$X\`.\`',table_name,'\` WHERE \`',column_name,'\` LIKE ''%$needle%''') SEPARATOR ' UNION ALL ') FROM information_schema.columns WHERE table_schema='$X' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext') AND table_name LIKE 'wp\\_%'")
-  LEFT=$(echo "SELECT * FROM ($Q) x WHERE n>0" | sql)
-  if [ -n "$LEFT" ]; then echo "   RESIDUAL '$needle':"; echo "$LEFT" | sed 's/^/     /'; echo "$needle" >> "$OUT/residuals.txt"; else echo "   none: $needle"; fi
+  echo "SELECT * FROM ($Q) x WHERE n>0" | sql | sed "s/^/$needle	/" >> "$OUT/residuals-reported.tsv"
 done
 echo "== dump package database"
 docker exec "$C" sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --quick --hex-blob --default-character-set=utf8mb4 --skip-triggers "$1"' sh $X | gzip -6 > "$OUT/db.sql.gz"
@@ -59,5 +74,6 @@ cat > "$OUT/manifest.json" <<JSON
 JSON
 rm -f "$OUT/source-dermadirect_local.sql.gz" "$OUT/source-dermadirect_local.sql.gz.sha256"
 (cd "$OUT" && find . -type f ! -name SHA256SUMS | sort | xargs shasum -a 256 > SHA256SUMS)
-[ -f "$OUT/residuals.txt" ] && { echo "PACKAGE HAS RESIDUALS — review $OUT/residuals.txt before use"; exit 1; }
+[ -f "$OUT/residuals.txt" ] && { echo "PACKAGE HAS STRICT RESIDUALS — review $OUT/residuals.txt; not usable"; exit 1; }
+echo "reported (pre-existing, destination-owned or inert) residual locations: $(wc -l < "$OUT/residuals-reported.tsv") — see residuals-reported.tsv"
 echo "PACKAGE READY: $OUT"; du -sh "$OUT"

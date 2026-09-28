@@ -58,7 +58,13 @@ return [
     // to compare records modulo that rewrite. 'common' mirrors the original import's Bedrock layout
     // change; the profile maps the legacy base URL to the destination's for that environment.
     'url_rewrite' => [
-        'common' => [['/wp-content/uploads/', '/app/uploads/']],
+        // 'common' applies to every source. The second pair reverses DevKinsta's local-domain rewrite:
+        // a DevKinsta pull replaces dermadirect.co.uk with httpsdermadirectcom.local everywhere, including
+        // inside email addresses (e.g. order-note author woocommerce@dermadirect.co.uk). Verified on legacy
+        // production 2026-09-28 (read-only): 1,553,901 notes use woocommerce@dermadirect.co.uk, 0 use the
+        // local host. Full site URLs are matched first (longer key) by the profile pair; this pair only
+        // restores the remaining bare host. A no-op for authentic sources (--from-legacy-kinsta).
+        'common' => [['/wp-content/uploads/', '/app/uploads/'], ['httpsdermadirectcom.local', 'dermadirect.co.uk']],
         'profiles' => [
             'rehearsal' => [['https://httpsdermadirectcom.local:8443', 'http://localhost:8088']],
             // Final sync on Kinsta runs after the destination takes the production domain: legacy URLs

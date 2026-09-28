@@ -40,4 +40,35 @@ t "second apply refused while lock held" "mkdir $PRIV/lock && ! $DOCK 'bash /sim
 sql -e "INSERT INTO $DB.wp_posts (ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count) VALUES (1000001,0,NOW(),UTC_TIMESTAMP(),'','Order','','wc-processing','closed','closed','','order-sim','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'shop_order','',0)"
 t "Action A refuses once the new site has its own orders" "$DOCK 'bash /sim/private/dd-deploy/incoming/pkg/remote/initial-import.sh /sim/public $URL /sim/private/dd-deploy/incoming/pkg /sim/private/dd-deploy X' 2>&1 | grep -q 'permanently disabled'"
 sql -e "DELETE FROM $DB.wp_posts WHERE ID=1000001"
+
+echo "== browser checks on the simulated hosted URL (Playwright; host mapped to a temporary internal web server)"
+WPS() { $DOCK "cd /sim/public && wp $1 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'"; }
+QAP=$(openssl rand -hex 12); WPS "user create dd-sim-qa dd-sim-qa@example.invalid --role=administrator --user_pass=$QAP --skip-email --porcelain" >/dev/null
+CUST=$(sql -e "SELECT pm.meta_value FROM $DB.wp_postmeta pm JOIN $DB.wp_posts p ON p.ID=pm.post_id AND p.post_type='shop_order' AND p.post_status='wc-completed' WHERE pm.meta_key='_customer_user' AND pm.meta_value>0 AND pm.post_id>698900 ORDER BY pm.post_id DESC LIMIT 1")
+CLOGIN=$(sql -e "SELECT user_login FROM $DB.wp_users WHERE ID=$CUST"); CHASH=$(sql -e "SELECT user_pass FROM $DB.wp_users WHERE ID=$CUST"); CP=$(openssl rand -hex 12)
+WPS "user update $CUST --user_pass=$CP --skip-email" >/dev/null
+umask 077; E=$SIM/qa-env; mkdir -p "$E"; printf 'RH_ADMIN_LOGIN=dd-sim-qa\nRH_ADMIN_PASS=%s\n' "$QAP" > "$E/admin.env"; printf 'RH_CUSTOMER_LOGIN=%s\nRH_CUSTOMER_PASS=%s\n' "$CLOGIN" "$CP" > "$E/customer.env"
+scripts/deploy/tests/sim-web.sh up "$SIM" "$DB"
+PLAYWRIGHT_MODULE=${PLAYWRIGHT_MODULE:?} node scripts/migration/qa/qa.mjs --label=sim-hosted --base=$URL --map=http://127.0.0.1:8091 --admin-env="$E/admin.env" --customer --customer-env="$E/customer.env" --orderid=698961 --homeid=996282 > migration-reports/qa-sim-hosted.log 2>&1 || true
+scripts/deploy/tests/sim-web.sh down
+WPS "user delete dd-sim-qa --yes" >/dev/null; sql -e "UPDATE $DB.wp_users SET user_pass='$CHASH' WHERE ID=$CUST"; rm -rf "$E"
+t "sim: temporary QA admin removed and customer hash restored" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_users WHERE user_login='dd-sim-qa'\")\" = 0 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=$CUST\")\" = '$CHASH' ]"
+t "sim browser: no failing page except the known offline Super Payments editor 500" "python3 -c \"import json,sys;d=json.load(open('migration-reports/qa/sim-hosted/report.json'));bad=[x for x in d['summary']['non2xx']+d['summary']['criticalErrors'] if not x.startswith('admin-home-edit')];print(bad);sys.exit(1 if bad else 0)\""
+t "sim browser: admin login, customer login + order history" "grep -q 'adminLogin true' migration-reports/qa-sim-hosted.log && grep -q 'customerLogin true' migration-reports/qa-sim-hosted.log"
+t "sim browser: orders screen All (120,194) / 120,148 items" "grep -q 'All (120,194)' migration-reports/qa-sim-hosted.log && grep -q '120,148 items' migration-reports/qa-sim-hosted.log"
+t "sim browser: no request left for the internet" "! grep -q 'kinsta.cloud' migration-reports/qa/sim-hosted/report.json || python3 -c \"import json,sys;d=json.load(open('migration-reports/qa/sim-hosted/report.json'));sys.exit(0 if 'dermadirect20uk.kinsta.cloud' not in d['blockedExternal'] else 1)\""
+
+echo "== cron suppression on the simulated server"
+T0=$(date -u '+%Y-%m-%d %H:%M:%S'); $DOCK "cd /sim/public && php web/wp/wp-cron.php >/dev/null 2>&1; true"
+t "sim: wp-cron.php executes no scheduled action" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_actionscheduler_actions WHERE last_attempt_gmt >= '$T0'\")\" = 0 ]"
+
+echo "== independent reconciliation of the simulated hosted database against the legacy snapshot"
+./scripts/migration/run.sh reconcile.php --src=dd_rh_src_pristine_20260926 --src-prefix=lgcy_ --dest=$DB > migration-reports/reconcile-sim-hosted.log 2>&1
+t "sim reconcile OK" "grep -q 'RECONCILE OK' migration-reports/reconcile-sim-hosted.log"
+
+echo "== recovery: restore the pre-import backup taken by initial-import.sh (the documented rollback)"
+BK=$(ls -1t $PRIV/backups/pre-initial-*.sql.gz | head -1); BKN=$(basename "$BK")
+$DOCK "cd /sim/public && gunzip -c /sim/private/dd-deploy/backups/$BKN | wp db import - >/dev/null 2>&1"
+t "restore returns the pre-import site (max order 695563, original staff hash)" "[ \"\$(sql -e \"SELECT MAX(ID) FROM $DB.wp_posts WHERE post_type='shop_order'\")\" = 695563 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=10224\")\" = \"$STAFF_HASH_BEFORE\" ]"
+
 [ $fails = 0 ] && echo "ALL PASSED" || { echo "$fails FAILED"; exit 1; }
