@@ -1,0 +1,20 @@
+{
+  "_about": "Synthetic records created for the local rehearsal (tests/make-fixtures.php, tests/later-activity.sql). A record is removed only if it matches these markers exactly. Real records that the tests modified are restored by re-syncing from the unmodified legacy snapshot.",
+  "users": { "login_prefix": "dd-migration-test-", "email_suffix": "@example.invalid" },
+  "orders": { "post_types": ["shop_order", "shop_order_refund"], "title_prefix": "DD-MIGRATION-TEST" },
+  "notes": { "content_prefix": "DD-MIGRATION-TEST", "author_email": "woocommerce@example.invalid" },
+  "back_in_stock": { "email_suffix": "@example.invalid" },
+  "real_records_modified_by_tests": [
+    { "record": "note added to real order 600000", "restore": "sync from unmodified snapshot (order graph replaced)" },
+    { "record": "product 694749 _stock decremented", "restore": "sync from unmodified snapshot (commercial field)" },
+    { "record": "latest published coupon usage_count +1 (698875)", "restore": "sync from unmodified snapshot (coupon graph replaced)" }
+  ],
+  "files": [
+    "web/app/uploads/print-invoices-packing-slip-labels-for-woocommerce/invoice/*/Invoice_<test order id>.html",
+    "web/app/uploads/packing-slips/<test order id>.pdf"
+  ],
+  "local_only_exceptions_never_exported": [
+    { "record": "user 47553 dermadirect-local-admin (relocated local admin) and its auto-draft post 996749" },
+    { "record": "user 10224 password hash (local override); hosted staff accounts are restored from the hosted site on import" }
+  ]
+}

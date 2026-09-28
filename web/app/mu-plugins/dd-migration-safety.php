@@ -134,16 +134,17 @@ add_filter('pre_wp_mail', function ($null, $atts) {
  * Note: it filters the settings in memory only. Nothing is written to the database,
  * so the real credentials survive intact for cutover.
  * ---------------------------------------------------------------------- */
-foreach (['woocommerce_stripe_settings', 'woocommerce_stripe_cc_settings', 'woocommerce_stripe_api_settings'] as $option) {
+foreach (['woocommerce_stripe_settings', 'woocommerce_stripe_cc_settings', 'woocommerce_stripe_api_settings', 'woocommerce_superpayments_settings'] as $option) {
     add_filter("option_{$option}", function ($value) {
         if (!is_array($value)) {
             return $value;
         }
 
-        $value['testmode'] = 'yes';
+        $value['testmode']  = 'yes';
+        $value['test_mode'] = 'yes'; // Super Payments uses test_mode
         $value['enabled']  = $value['enabled'] ?? 'no';
 
-        foreach (['secret_key', 'publishable_key', 'webhook_secret'] as $key) {
+        foreach (['secret_key', 'publishable_key', 'webhook_secret', 'api_key', 'signing_key', 'publishable_api_key'] as $key) {
             if (isset($value[$key])) {
                 $value[$key] = '';
             }
