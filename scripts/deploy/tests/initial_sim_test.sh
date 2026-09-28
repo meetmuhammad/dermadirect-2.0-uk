@@ -21,13 +21,15 @@ rm -rf "$PRIV/incoming/pkg"; mkdir -p "$PRIV/incoming"; cp -Rp "$PKG" "$PRIV/inc
 # Test-container only: the local MariaDB 10.11 has no TLS and the wordpress:cli client requires it by default.
 # WP-CLI passes --no-defaults to the client for some calls, so a config file alone is not enough:
 # client wrappers on PATH add --skip-ssl. Nothing in the package is changed for the simulation.
-mkdir -p "$SIM/conf/bin"; printf '[client]\nskip-ssl\n' > "$SIM/conf/nossl.cnf"
+# PHP memory matches Kinsta's web limit (512M; Kinsta CLI is unlimited). The image default of 128M
+# cannot boot this plugin set (peak ~200MB).
+mkdir -p "$SIM/conf/bin"; printf '[client]\nskip-ssl\n' > "$SIM/conf/nossl.cnf"; printf 'memory_limit=512M\n' > "$SIM/conf/php-sim.ini"
 for c in mariadb mariadb-dump mysql mysqldump; do
   printf '#!/bin/sh\nif [ "${1:-}" = --no-defaults ]; then shift; exec /usr/bin/%s --no-defaults --skip-ssl "$@"; fi\nexec /usr/bin/%s "$@"\n' $c $c > "$SIM/conf/bin/$c"; chmod +x "$SIM/conf/bin/$c"
 done
 # a fresh rehearsal: backups from earlier simulated runs must not satisfy the backup assertion
 rm -f "$PRIV"/backups/pre-initial-* "$PRIV"/backups/hosted-*
-DOCK="docker run --rm --network dermadirect20uk_internal -v $SIM:/sim -v $SIM/conf/nossl.cnf:/etc/my.cnf.d/zz-nossl.cnf:ro -v $SIM/conf/bin:/usr/local/sbin:ro -w /sim/public --entrypoint bash wordpress:cli -c"
+DOCK="docker run --rm --network dermadirect20uk_internal -v $SIM:/sim -v $SIM/conf/nossl.cnf:/etc/my.cnf.d/zz-nossl.cnf:ro -v $SIM/conf/bin:/usr/local/sbin:ro -v $SIM/conf/php-sim.ini:/usr/local/etc/php/conf.d/zz-sim.ini:ro -w /sim/public --entrypoint bash wordpress:cli -c"
 echo "== remote/initial-import.sh (inside the simulated server)"
 $DOCK "set -o pipefail; bash /sim/private/dd-deploy/incoming/pkg/remote/initial-import.sh /sim/public $URL /sim/private/dd-deploy/incoming/pkg /sim/private/dd-deploy SIMULATED-MYKINSTA-BACKUP 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'" \
   || { echo "IMPORT FAILED — stopping the rehearsal (see output above)"; exit 1; }
@@ -78,7 +80,8 @@ t "sim reconcile OK" "grep -q 'RECONCILE OK' migration-reports/reconcile-sim-hos
 
 echo "== recovery: restore the pre-import backup taken by initial-import.sh (the documented rollback)"
 BK=$(ls -1t $PRIV/backups/pre-initial-*.sql.gz | head -1); BKN=$(basename "$BK")
-$DOCK "cd /sim/public && gunzip -c /sim/private/dd-deploy/backups/$BKN | wp db import - >/dev/null 2>&1"
-t "restore returns the pre-import site (max order 695563, original staff hash)" "[ \"\$(sql -e \"SELECT MAX(ID) FROM $DB.wp_posts WHERE post_type='shop_order'\")\" = 695563 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=10224\")\" = \"\$STAFF_HASH_BEFORE\" ]"
+BKT=$(gunzip -c "$BK" | grep -c '^CREATE TABLE `')
+$DOCK "set -o pipefail; bash /sim/private/dd-deploy/incoming/pkg/remote/restore-backup.sh /sim/public $URL /sim/private/dd-deploy /sim/private/dd-deploy/backups/$BKN 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'"
+t "restore returns the pre-import site (same table set, max order 695563, original staff hash)" "[ \"\$(sql -e \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB'\")\" = $BKT ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$DB' AND table_name LIKE 'dd\\_mig%'\")\" = 0 ] && [ \"\$(sql -e \"SELECT MAX(ID) FROM $DB.wp_posts WHERE post_type='shop_order'\")\" = 695563 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=10224\")\" = \"\$STAFF_HASH_BEFORE\" ]"
 
 [ $fails = 0 ] && echo "ALL PASSED" || { echo "$fails FAILED"; exit 1; }

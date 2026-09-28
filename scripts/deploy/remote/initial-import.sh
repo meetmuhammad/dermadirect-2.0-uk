@@ -50,4 +50,4 @@ DBN=$(wp db query --skip-column-names "SELECT DATABASE()")   # what WordPress ac
 MIG_HOSTED=1 MIG_BEDROCK_ROOT="$ROOT" MIG_REPORT_DIR="$PRIV/reports" php scripts/migration/neutralize.php apply --dest="$DBN" --confirm-dest="$DBN"
 echo "== caches (WordPress boots with WP_ENV!=production and the safety harness on)"
 wp cache flush; wp rewrite flush; (wp kinsta cache purge --all 2>/dev/null || true)
-echo "IMPORTED $(basename "$PKG") at $TS. Restore with: gunzip -c $PRIV/backups/pre-initial-$TS.sql.gz | wp db import -"
+echo "IMPORTED $(basename "$PKG") at $TS. Roll back with: bash $PKG/remote/restore-backup.sh $ROOT $URL $PRIV $PRIV/backups/pre-initial-$TS.sql.gz"
