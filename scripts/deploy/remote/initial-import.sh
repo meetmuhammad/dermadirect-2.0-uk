@@ -18,9 +18,12 @@ echo "== MyKinsta backup declared by operator: $KBK"
 echo "== own database backup"
 avail=$(df -Pk "$PRIV" | awk 'NR==2{print $4}'); need=$(( $(stat -c %s "$PKG/db.sql.gz") / 1024 * 4 ))
 [ "$avail" -gt "$need" ] || { echo "not enough disk for backup+import (${avail}K free, need ~${need}K)"; exit 7; }
-wp db export - --single-transaction --quick | gzip -6 > "$PRIV/backups/pre-initial-$TS.sql.gz"
 NT=$(wp db query --skip-column-names "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE'")
-dump_ok "$PRIV/backups/pre-initial-$TS.sql.gz" "$NT" || { echo "BACKUP INCOMPLETE — refusing to continue (nothing was changed)"; exit 9; }
+# A failed or partial export is renamed so it can never be picked as "the latest backup" in a rollback.
+if ! wp db export - --single-transaction --quick | gzip -6 > "$PRIV/backups/pre-initial-$TS.sql.gz" || ! dump_ok "$PRIV/backups/pre-initial-$TS.sql.gz" "$NT"; then
+  mv "$PRIV/backups/pre-initial-$TS.sql.gz" "$PRIV/backups/INCOMPLETE-pre-initial-$TS.sql.gz"
+  echo "BACKUP INCOMPLETE — refusing to continue (nothing was changed)"; exit 9
+fi
 sha256sum "$PRIV/backups/pre-initial-$TS.sql.gz" > "$PRIV/backups/pre-initial-$TS.sql.gz.sha256"
 echo "   backup: $PRIV/backups/pre-initial-$TS.sql.gz ($(du -h "$PRIV/backups/pre-initial-$TS.sql.gz" | cut -f1))"
 echo "== save hosted staff accounts and hosted credentials/settings"

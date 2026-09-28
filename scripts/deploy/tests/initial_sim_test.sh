@@ -19,12 +19,20 @@ for d in web/app/plugins/*/; do n=$(basename "$d"); case $n in super-payments|wo
 STAFF_HASH_BEFORE=$(sql -e "SELECT user_pass FROM $DB.wp_users WHERE ID=10224")
 rm -rf "$PRIV/incoming/pkg"; mkdir -p "$PRIV/incoming"; cp -Rp "$PKG" "$PRIV/incoming/pkg"
 # Test-container only: the local MariaDB 10.11 has no TLS and the wordpress:cli client requires it by default.
-mkdir -p "$SIM/conf"; printf '[client]\nskip-ssl\n' > "$SIM/conf/nossl.cnf"
-DOCK="docker run --rm --network dermadirect20uk_internal -v $SIM:/sim -v $SIM/conf/nossl.cnf:/etc/my.cnf.d/zz-nossl.cnf:ro -w /sim/public --entrypoint bash wordpress:cli -c"
+# WP-CLI passes --no-defaults to the client for some calls, so a config file alone is not enough:
+# client wrappers on PATH add --skip-ssl. Nothing in the package is changed for the simulation.
+mkdir -p "$SIM/conf/bin"; printf '[client]\nskip-ssl\n' > "$SIM/conf/nossl.cnf"
+for c in mariadb mariadb-dump mysql mysqldump; do
+  printf '#!/bin/sh\nif [ "${1:-}" = --no-defaults ]; then shift; exec /usr/bin/%s --no-defaults --skip-ssl "$@"; fi\nexec /usr/bin/%s "$@"\n' $c $c > "$SIM/conf/bin/$c"; chmod +x "$SIM/conf/bin/$c"
+done
+# a fresh rehearsal: backups from earlier simulated runs must not satisfy the backup assertion
+rm -f "$PRIV"/backups/pre-initial-* "$PRIV"/backups/hosted-*
+DOCK="docker run --rm --network dermadirect20uk_internal -v $SIM:/sim -v $SIM/conf/nossl.cnf:/etc/my.cnf.d/zz-nossl.cnf:ro -v $SIM/conf/bin:/usr/local/sbin:ro -w /sim/public --entrypoint bash wordpress:cli -c"
 echo "== remote/initial-import.sh (inside the simulated server)"
-$DOCK "bash /sim/private/dd-deploy/incoming/pkg/remote/initial-import.sh /sim/public $URL /sim/private/dd-deploy/incoming/pkg /sim/private/dd-deploy SIMULATED-MYKINSTA-BACKUP 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'"
+$DOCK "set -o pipefail; bash /sim/private/dd-deploy/incoming/pkg/remote/initial-import.sh /sim/public $URL /sim/private/dd-deploy/incoming/pkg /sim/private/dd-deploy SIMULATED-MYKINSTA-BACKUP 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'" \
+  || { echo "IMPORT FAILED — stopping the rehearsal (see output above)"; exit 1; }
 echo "== remote/initial-verify.sh"
-$DOCK "bash /sim/private/dd-deploy/incoming/pkg/remote/initial-verify.sh /sim/public /sim/private/dd-deploy/incoming/pkg 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'"
+$DOCK "set -o pipefail; bash /sim/private/dd-deploy/incoming/pkg/remote/initial-verify.sh /sim/public /sim/private/dd-deploy/incoming/pkg 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'"
 echo "== assertions"
 fails=0; t() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fails=$((fails+1)); fi; }
 t "hosted staff password hash preserved (not the local override)" "[ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=10224\")\" = \"\$STAFF_HASH_BEFORE\" ]"
@@ -37,7 +45,7 @@ t "renumbering map carried over" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.dd_mi
 t "renumbered CSS files placed in uploads" "[ -f $P/web/app/uploads/generateblocks/style-996282.css ]"
 t "retained plugins installed" "[ -f $P/web/app/plugins/super-payments/super-payments.php ]"
 t "webhooks paused, no pending deliveries" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_wc_webhooks WHERE status='active'\")\" = 0 ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_actionscheduler_actions WHERE status='pending' AND hook='woocommerce_deliver_webhook_async'\")\" = 0 ]"
-t "pre-import backup exists and is valid" "ls $PRIV/backups/pre-initial-*.sql.gz >/dev/null && gzip -t \$(ls -1t $PRIV/backups/pre-initial-*.sql.gz | head -1)"
+t "pre-import backup exists and is valid" "B=\$(ls -1t $PRIV/backups/pre-initial-*.sql.gz | head -1) && gunzip -c \$B | tail -c 300 | grep -q -- '-- Dump completed' && [ \$(gunzip -c \$B | grep -c '^CREATE TABLE') -ge 200 ]"
 t "second apply refused while lock held" "mkdir $PRIV/lock && ! $DOCK 'bash /sim/private/dd-deploy/incoming/pkg/remote/initial-import.sh /sim/public $URL /sim/private/dd-deploy/incoming/pkg /sim/private/dd-deploy X' >/dev/null 2>&1; rmdir $PRIV/lock 2>/dev/null || rm -rf $PRIV/lock"
 sql -e "INSERT INTO $DB.wp_posts (ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count) VALUES (1000001,0,NOW(),UTC_TIMESTAMP(),'','Order','','wc-processing','closed','closed','','order-sim','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'shop_order','',0)"
 t "Action A refuses once the new site has its own orders" "$DOCK 'bash /sim/private/dd-deploy/incoming/pkg/remote/initial-import.sh /sim/public $URL /sim/private/dd-deploy/incoming/pkg /sim/private/dd-deploy X' 2>&1 | grep -q 'permanently disabled'"
