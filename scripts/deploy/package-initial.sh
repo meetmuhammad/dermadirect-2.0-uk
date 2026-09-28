@@ -43,7 +43,7 @@ for t in $TABLES; do
 done
 fi
 if [ "${RESUME_AT:-}" = after-dump ]; then
-  gzip -t "$OUT/db.sql.gz" && [ -f "$OUT/residuals-reported.tsv" ] && [ ! -f "$OUT/residuals.txt" ] || { echo "cannot resume after dump: dump missing/corrupt or strict residuals recorded"; exit 1; }
+  gunzip -c "$OUT/db.sql.gz" | tail -c 300 | grep -q -- '-- Dump completed' && [ -f "$OUT/residuals-reported.tsv" ] && [ ! -f "$OUT/residuals.txt" ] || { echo "cannot resume after dump: dump missing/corrupt or strict residuals recorded"; exit 1; }
   echo "== resuming after verified dump ($(du -h "$OUT/db.sql.gz" | cut -f1))"
 else
 echo "== residual checks"
@@ -69,6 +69,8 @@ for needle in "$FROM" "localhost:8089" "httpsdermadirectcom.local" "/var/www/htm
 done
 echo "== dump package database"
 docker exec "$C" sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --quick --hex-blob --default-character-set=utf8mb4 --skip-triggers "$1"' sh $X | gzip -6 > "$OUT/db.sql.gz"
+WANT=$(sql -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$X' AND table_type='BASE TABLE'")
+gunzip -c "$OUT/db.sql.gz" | tail -c 300 | grep -q -- '-- Dump completed' && [ "$(gunzip -c "$OUT/db.sql.gz" | grep -c '^CREATE TABLE')" -ge "$WANT" ] || { echo "PACKAGE DUMP INCOMPLETE"; rm -f "$OUT/db.sql.gz"; exit 1; }
 fi
 echo "== uploads delta (files renamed by renumbering)"
 sql -e "SELECT new_id FROM $X.dd_mig_idmap WHERE ns='posts'" | while read id; do f=web/app/uploads/generateblocks/style-$id.css; if [ -f "$f" ]; then mkdir -p "$OUT/uploads/generateblocks" && cp -p "$f" "$OUT/uploads/generateblocks/"; fi; done

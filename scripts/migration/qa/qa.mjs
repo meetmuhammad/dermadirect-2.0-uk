@@ -45,6 +45,7 @@ async function instrument(context) {
       return resp ? route.fulfill({ response: resp }) : route.abort('failed');
     }
     if (['localhost', '127.0.0.1'].includes(u.hostname)) return route.continue();
+    if (!MAP && u.hostname === BASEHOST) return route.continue(); // hosted QA: only the site under test
     report.blockedExternal[u.hostname] = (report.blockedExternal[u.hostname] || 0) + 1;
     return route.abort('blockedbyclient');
   });

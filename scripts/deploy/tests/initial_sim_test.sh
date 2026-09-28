@@ -18,14 +18,16 @@ echo "== simulated hosted .env (staging, harness on, review URL)"
 for d in web/app/plugins/*/; do n=$(basename "$d"); case $n in super-payments|woocommerce-gateway-rules-manager|product-batch-expiry-tracking-for-woocommerce|woocommerce-back-in-stock-notifications|wpgens-refer-a-friend-premium|advanced-shipment-tracking-pro) rm -rf "$P/web/app/plugins/$n";; *) [ -e "$P/web/app/plugins/$n" ] || cp -Rp "$d" "$P/web/app/plugins/";; esac; done
 STAFF_HASH_BEFORE=$(sql -e "SELECT user_pass FROM $DB.wp_users WHERE ID=10224")
 rm -rf "$PRIV/incoming/pkg"; mkdir -p "$PRIV/incoming"; cp -Rp "$PKG" "$PRIV/incoming/pkg"
-DOCK="docker run --rm --network dermadirect20uk_internal -v $SIM:/sim -w /sim/public --entrypoint bash wordpress:cli -c"
+# Test-container only: the local MariaDB 10.11 has no TLS and the wordpress:cli client requires it by default.
+mkdir -p "$SIM/conf"; printf '[client]\nskip-ssl\n' > "$SIM/conf/nossl.cnf"
+DOCK="docker run --rm --network dermadirect20uk_internal -v $SIM:/sim -v $SIM/conf/nossl.cnf:/etc/my.cnf.d/zz-nossl.cnf:ro -w /sim/public --entrypoint bash wordpress:cli -c"
 echo "== remote/initial-import.sh (inside the simulated server)"
 $DOCK "bash /sim/private/dd-deploy/incoming/pkg/remote/initial-import.sh /sim/public $URL /sim/private/dd-deploy/incoming/pkg /sim/private/dd-deploy SIMULATED-MYKINSTA-BACKUP 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'"
 echo "== remote/initial-verify.sh"
 $DOCK "bash /sim/private/dd-deploy/incoming/pkg/remote/initial-verify.sh /sim/public /sim/private/dd-deploy/incoming/pkg 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'"
 echo "== assertions"
 fails=0; t() { if eval "$2"; then echo "PASS $1"; else echo "FAIL $1"; fails=$((fails+1)); fi; }
-t "hosted staff password hash preserved (not the local override)" "[ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=10224\")\" = \"$STAFF_HASH_BEFORE\" ]"
+t "hosted staff password hash preserved (not the local override)" "[ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=10224\")\" = \"\$STAFF_HASH_BEFORE\" ]"
 t "local-only admin 47553 not imported" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_users WHERE ID=47553\")\" = 0 ]"
 t "no synthetic test records" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_posts WHERE post_title LIKE 'DD-MIGRATION-TEST%'\")\" = 0 ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_users WHERE user_email LIKE '%@example.invalid'\")\" = 0 ]"
 t "home is the review URL" "[ \"\$(sql -e \"SELECT option_value FROM $DB.wp_options WHERE option_name='home'\")\" = '$URL' ]"
@@ -52,7 +54,7 @@ scripts/deploy/tests/sim-web.sh up "$SIM" "$DB"
 PLAYWRIGHT_MODULE=${PLAYWRIGHT_MODULE:?} node scripts/migration/qa/qa.mjs --label=sim-hosted --base=$URL --map=http://127.0.0.1:8091 --admin-env="$E/admin.env" --customer --customer-env="$E/customer.env" --orderid=698961 --homeid=996282 > migration-reports/qa-sim-hosted.log 2>&1 || true
 scripts/deploy/tests/sim-web.sh down
 WPS "user delete dd-sim-qa --yes" >/dev/null; sql -e "UPDATE $DB.wp_users SET user_pass='$CHASH' WHERE ID=$CUST"; rm -rf "$E"
-t "sim: temporary QA admin removed and customer hash restored" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_users WHERE user_login='dd-sim-qa'\")\" = 0 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=$CUST\")\" = '$CHASH' ]"
+t "sim: temporary QA admin removed and customer hash restored" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_users WHERE user_login='dd-sim-qa'\")\" = 0 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=$CUST\")\" = \"\$CHASH\" ]"
 t "sim browser: no failing page except the known offline Super Payments editor 500" "python3 -c \"import json,sys;d=json.load(open('migration-reports/qa/sim-hosted/report.json'));bad=[x for x in d['summary']['non2xx']+d['summary']['criticalErrors'] if not x.startswith('admin-home-edit')];print(bad);sys.exit(1 if bad else 0)\""
 t "sim browser: admin login, customer login + order history" "grep -q 'adminLogin true' migration-reports/qa-sim-hosted.log && grep -q 'customerLogin true' migration-reports/qa-sim-hosted.log"
 t "sim browser: orders screen All (120,194) / 120,148 items" "grep -q 'All (120,194)' migration-reports/qa-sim-hosted.log && grep -q '120,148 items' migration-reports/qa-sim-hosted.log"
@@ -69,6 +71,6 @@ t "sim reconcile OK" "grep -q 'RECONCILE OK' migration-reports/reconcile-sim-hos
 echo "== recovery: restore the pre-import backup taken by initial-import.sh (the documented rollback)"
 BK=$(ls -1t $PRIV/backups/pre-initial-*.sql.gz | head -1); BKN=$(basename "$BK")
 $DOCK "cd /sim/public && gunzip -c /sim/private/dd-deploy/backups/$BKN | wp db import - >/dev/null 2>&1"
-t "restore returns the pre-import site (max order 695563, original staff hash)" "[ \"\$(sql -e \"SELECT MAX(ID) FROM $DB.wp_posts WHERE post_type='shop_order'\")\" = 695563 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=10224\")\" = \"$STAFF_HASH_BEFORE\" ]"
+t "restore returns the pre-import site (max order 695563, original staff hash)" "[ \"\$(sql -e \"SELECT MAX(ID) FROM $DB.wp_posts WHERE post_type='shop_order'\")\" = 695563 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=10224\")\" = \"\$STAFF_HASH_BEFORE\" ]"
 
 [ $fails = 0 ] && echo "ALL PASSED" || { echo "$fails FAILED"; exit 1; }

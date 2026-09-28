@@ -103,7 +103,7 @@ snapshot)
 backup)
   if [ -n "$HOSTED" ]; then
     B="$RD/pre-apply-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
-    $SSH "mkdir -p '$RD' && cd '$R' && wp db export - --single-transaction --quick | gzip -6 > '$B' && gzip -t '$B' && sha256sum '$B' > '$B.sha256' && ls -l '$B'"
+    $SSH "mkdir -p '$RD' && cd '$R' && set -o pipefail && wp db export - --single-transaction --quick | gzip -6 > '$B' && N=\$(wp db query --skip-column-names \"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_type='BASE TABLE'\") && gunzip -c '$B' | tail -c 300 | grep -q -- '-- Dump completed' && [ \$(gunzip -c '$B' | grep -c '^CREATE TABLE') -ge \$N ] && sha256sum '$B' > '$B.sha256' && ls -l '$B'" || { echo "hosted backup incomplete — do not apply"; exit 3; }
   else
     B="$DIR/pre-apply-$DEST-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"; ./scripts/migration/snapshot.sh dump "$DEST" "$B"
   fi
@@ -136,7 +136,7 @@ apply|resume)
   [ "$CONFIRM" = "$DEST" ] || { echo "apply needs --confirm-dest=$DEST"; exit 2; }
   [ -n "$BACKUP" ] || { echo "apply needs --backup=<fresh dump of $DEST>"; exit 2; }
   if [ -n "$HOSTED" ]; then
-    $SSH "test -s '$BACKUP' && gzip -t '$BACKUP' && test \$(( \$(date +%s) - \$(stat -c %Y '$BACKUP') )) -lt 21600" || { echo "backup $BACKUP missing, corrupt or older than 6h"; exit 3; }
+    $SSH "test -s '$BACKUP' && gunzip -c '$BACKUP' | tail -c 300 | grep -q -- '-- Dump completed' && test \$(( \$(date +%s) - \$(stat -c %Y '$BACKUP') )) -lt 21600" || { echo "backup $BACKUP missing, corrupt or older than 6h"; exit 3; }
   else
     shasum -a 256 -c "$BACKUP.sha256" >/dev/null && [ $(( $(date +%s) - $(stat -f %m "$BACKUP") )) -lt 21600 ] || { echo "backup $BACKUP missing, unverified or older than 6h"; exit 3; }
   fi

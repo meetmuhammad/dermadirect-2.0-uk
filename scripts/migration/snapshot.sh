@@ -9,6 +9,11 @@ sql() { docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -N "$
 case "${1:-}" in
 dump)
   docker exec "$C" sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --quick --hex-blob --routines --triggers --default-character-set=utf8mb4 "$1"' sh "$2" | gzip -6 > "$3"
+  # A failed mariadb-dump piped into gzip still yields a valid (empty) gzip: require the dump trailer
+  # and at least one table per table in the source schema before accepting the file.
+  want=$(sql -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$2' AND table_type='BASE TABLE'")
+  got=$(gunzip -c "$3" | grep -c '^CREATE TABLE' || true)
+  gunzip -c "$3" | tail -c 300 | grep -q -- '-- Dump completed' && [ "$got" -ge "$want" ] || { echo "DUMP INCOMPLETE: $3 ($got of $want tables)"; rm -f "$3"; exit 1; }
   shasum -a 256 "$3" > "$3.sha256"; ls -l "$3"; cat "$3.sha256" ;;
 restore)
   case "$3" in dermadirect_local|legacy_snapshot_20260927|httpsdermadirectcom) echo "refusing protected db $3" >&2; exit 2;; esac
