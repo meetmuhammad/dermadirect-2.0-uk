@@ -71,7 +71,7 @@ async function instrument(context) {
     }
     if (['localhost', '127.0.0.1'].includes(u.hostname)) {
       // Simulated hosted site: a page that points at a local address is a defect (wrong site URL).
-      if (MAP) { report.localRequests = (report.localRequests || 0) + 1; return route.abort('blockedbyclient'); }
+      if (MAP) { report.localRequests = (report.localRequests || 0) + 1; (report.localRequestUrls ||= []).push(u.href.slice(0, 200)); return route.abort('blockedbyclient'); }
       return route.continue();
     }
     if (!MAP && u.hostname === BASEHOST) return route.continue(); // hosted QA: only the site under test
@@ -239,6 +239,8 @@ report.summary = {
   non2xx: Object.entries(report.pages).filter(([, p]) => !(p.status >= 200 && p.status < 400)).map(([k, p]) => `${k}:${p.status}`),
   criticalErrors: Object.entries(report.pages).filter(([, p]) => p.criticalError).map(([k]) => k),
   brokenImages: Object.values(report.pages).reduce((n, p) => n + p.brokenImages.length, 0),
+  // the site's own media only: images on other hosts (e.g. WordPress emoji CDN) are blocked by design
+  sameSiteBrokenImages: Object.values(report.pages).flatMap((p) => p.brokenImages).filter((u) => { try { return new URL(u, BASE).hostname === BASEHOST; } catch { return true; } }),
   failedRequests: Object.values(report.pages).reduce((n, p) => n + p.failed.length, 0),
   consoleErrors: Object.values(report.pages).reduce((n, p) => n + p.console.length, 0),
   linksChecked: Object.keys(report.links).length, badLinks,

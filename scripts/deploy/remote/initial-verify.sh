@@ -30,6 +30,8 @@ ck "effective home/site/content/admin/my-account URLs all on $HOST" "${BADHOSTS:
 LOCAL='https?:(\\\\?/){2}(localhost|127\\.0\\.0\\.1)|https?:(\\\\?/){2}[^/"]*:808[89]'
 ck "settings with a URL to localhost / :8088 / :8089" "$(q "SELECT COUNT(*) FROM ${P}options WHERE option_value REGEXP '$LOCAL'")" 0
 ck "content with a URL to localhost / :8088 / :8089 (non-GUID)" "$(q "SELECT (SELECT COUNT(*) FROM ${P}posts WHERE post_content REGEXP '$LOCAL' OR post_excerpt REGEXP '$LOCAL') + (SELECT COUNT(*) FROM ${P}postmeta WHERE meta_value REGEXP '$LOCAL')")" 0
+BADF=$(cd "$PKG/uploads" && find . -type f | sed 's#^\./##' | while read -r f; do grep -lE 'https?:(\\?/){2}(localhost|127\.0\.0\.1)|:808[89]' "$ROOT/web/app/uploads/$f" 2>/dev/null || true; done | wc -l | tr -d ' ')
+ck "shipped upload files (renamed CSS) with a URL to localhost / :8088 / :8089" "$BADF" 0
 # DevKinsta domain in destination-owned content is pre-existing on Kinsta (pending decision, residuals-reported.tsv):
 # the import must not add any. Settings are reported only (destination-owned; decision pending).
 rep() { awk -F'\t' -v c="$1" '$1=="httpsdermadirectcom.local" && $2==c {print $3}' "$PKG/residuals-reported.tsv"; }

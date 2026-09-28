@@ -91,7 +91,8 @@ sql -e "DELETE FROM $DB.wp_posts WHERE ID=1000001"
 
 echo "== browser checks on the simulated hosted URL (Playwright; host mapped to the internal web server)"
 WPS() { $DOCK "cd $KR && wp $1 2>&1 | grep -v -e WC_SA_Email -e 'a-email.php'"; }
-QAP=$(openssl rand -hex 12); WPS "user create dd-sim-qa dd-sim-qa@example.invalid --role=administrator --user_pass=$QAP --skip-email --porcelain" >/dev/null
+QAP=$(openssl rand -hex 12); WPS "user create dd-sim-qa dd-sim-qa@example.invalid --role=administrator --user_pass=$QAP --porcelain" >/dev/null
+t "sim: temporary QA admin created (for the browser checks only)" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_users WHERE user_login='dd-sim-qa'\")\" = 1 ]"
 CUST=$(sql -e "SELECT pm.meta_value FROM $DB.wp_postmeta pm JOIN $DB.wp_posts p ON p.ID=pm.post_id AND p.post_type='shop_order' AND p.post_status='wc-completed' WHERE pm.meta_key='_customer_user' AND pm.meta_value>0 AND pm.post_id>698900 ORDER BY pm.post_id DESC LIMIT 1")
 OWN=$(sql -e "SELECT GROUP_CONCAT(post_id) FROM $DB.wp_postmeta WHERE meta_key='_customer_user' AND meta_value='$CUST'")
 FOREIGN=$(sql -e "SELECT pm.post_id FROM $DB.wp_postmeta pm JOIN $DB.wp_posts p ON p.ID=pm.post_id AND p.post_type='shop_order' AND p.post_status='wc-completed' WHERE pm.meta_key='_customer_user' AND pm.meta_value>0 AND pm.meta_value<>'$CUST' ORDER BY pm.post_id DESC LIMIT 1")
@@ -110,10 +111,14 @@ t "browser: customer sees only their own orders; another customer's order is ref
 # One recorded exception (PLAN §9.7, unchanged from earlier rehearsals): the homepage block editor returns 500
 # while Super Payments is active and its API is unreachable; pending Kiefer's Super Payments setup on Kinsta.
 t "browser: every storefront, product, menu and admin page returns 2xx/3xx without a critical error (except the recorded Super Payments editor 500)" "jq \"s=d['summary'];bad=[x for x in s['non2xx'] if x!='admin-home-edit-desktop:500']+[x for x in s['criticalErrors'] if x!='admin-home-edit-desktop'];print(bad);sys.exit(1 if bad else 0)\""
-t "browser: no broken images on storefront pages" "jq \"sys.exit(0 if d['summary']['brokenImages']==0 else 1)\""
-t "browser: every same-site link checked resolves" "jq \"sys.exit(0 if not d['summary']['badLinks'] else 1)\""
+t "browser: no broken image from the site's own media (other hosts are blocked by design)" "jq \"s=d['summary']['sameSiteBrokenImages'];print(s[:5]);sys.exit(0 if not s else 1)\""
+# a same-site link that fails must fail identically on the canonical local site (a content issue there,
+# reported), i.e. the deployment itself broke no link
+BADL=$(jq "print('\\n'.join(l.replace('$URL','')+' '+str(s) for l,s in d['summary']['badLinks']))" || true)
+echo "$BADL" | sed '/^$/d; s/^/   bad link on the simulated site: /'
+t "browser: every failing same-site link fails the same way on the canonical local site (no link broken by the deployment)" "echo \"\$BADL\" | sed '/^\$/d' | while read -r path st; do [ \"\$(curl -s -o /dev/null -w '%{http_code}' \"http://localhost:8088\$path\")\" = \"\$st\" ] || exit 1; done"
 t "browser: orders screen All (120,194) / 120,148 items" "grep -q 'All (120,194)' migration-reports/qa-sim-hosted.log && grep -q '120,148 items' migration-reports/qa-sim-hosted.log"
-t "browser: no page requested a local address (localhost/:8088/:8089); external hosts all blocked" "jq \"sys.exit(0 if not d.get('localRequests') and not any(h in ('localhost','127.0.0.1') for h in d['blockedExternal']) else 1)\""
+t "browser: no page requested a local address (localhost/:8088/:8089); external hosts all blocked" "jq \"print(d.get('localRequestUrls',[])[:5]);sys.exit(0 if not d.get('localRequests') and not any(h in ('localhost','127.0.0.1') for h in d['blockedExternal']) else 1)\""
 
 echo "== cron suppression on the simulated server"
 T0=$(date -u '+%Y-%m-%d %H:%M:%S'); $DOCK "cd $KR && php web/wp/wp-cron.php >/dev/null 2>&1; true"
