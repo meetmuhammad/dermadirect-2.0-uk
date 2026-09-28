@@ -42,7 +42,8 @@ cp -Rc web/app/uploads "$P/web/app/uploads"          # APFS clone: real media, n
 scripts/deploy/deploy.sh code "local:$P" "$ART" | tail -1
 { grep -E '^(DB_USER|DB_PASSWORD|AUTH_KEY|SECURE_AUTH_KEY|LOGGED_IN_KEY|NONCE_KEY|AUTH_SALT|SECURE_AUTH_SALT|LOGGED_IN_SALT|NONCE_SALT)=' .env
   printf "WP_ENV='staging'\nWP_HOME='%s'\nWP_SITEURL='%s/wp'\nDB_NAME='%s'\nDB_HOST='db'\nDB_PREFIX='wp_'\nDD_SAFETY_HARNESS='on'\nDISABLE_WP_CRON='true'\n" "$URL" "$URL" "$DB"; } > "$P/.env"
-for d in web/app/plugins/*/; do n=$(basename "$d"); case $n in super-payments|woocommerce-gateway-rules-manager|product-batch-expiry-tracking-for-woocommerce|woocommerce-back-in-stock-notifications|wpgens-refer-a-friend-premium|advanced-shipment-tracking-pro) ;; *) cp -Rp "$d" "$P/web/app/plugins/";; esac; done
+for d in web/app/plugins/*/; do n=$(basename "$d"); case $n in super-payments|woocommerce-gateway-rules-manager|product-batch-expiry-tracking-for-woocommerce|woocommerce-back-in-stock-notifications|wpgens-refer-a-friend-premium|advanced-shipment-tracking-pro) ;; *) cp -Rp "${d%/}" "$P/web/app/plugins/";; esac; done
+t "hosted plugin set in place (each plugin a folder; same set as local minus the retained plugins)" "[ \"\$(ls -p $P/web/app/plugins | grep -vc /)\" -le 1 ] && [ -f $P/web/app/plugins/advanced-custom-fields-pro/acf.php ]"
 rm -rf "$SIM/private"; mkdir -p "$PRIV/incoming"; cp -Rp "$PKG" "$PRIV/incoming/pkg"
 # Test container only: local MariaDB 10.11 has no TLS and the 11.x client requires it; WP-CLI passes
 # --no-defaults for some calls, so client wrappers add --skip-ssl. PHP memory = Kinsta web limit (512M).

@@ -27,6 +27,7 @@ PROTECT="--filter=P_/.env* --filter=P_/.git/ --filter=P_/web/app/uploads/ --filt
 case "$ACTION" in
 code)
   ART=${1:?artifact.tar.gz}
+  [ ! -e "$ART.SUPERSEDED" ] || { echo "REFUSED: $ART is superseded — $(head -1 "$ART.SUPERSEDED")"; exit 11; }
   (cd "$(dirname "$ART")" && shasum -a 256 -c "$(basename "$ART").sha256" >/dev/null) || { echo "artifact checksum mismatch"; exit 5; }
   lock; trap unlock EXIT
   if [ "${TARGET%%:*}" != local ]; then

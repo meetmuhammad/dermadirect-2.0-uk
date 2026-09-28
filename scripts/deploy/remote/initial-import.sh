@@ -11,6 +11,7 @@ mkdir "$PRIV/lock" 2>/dev/null || { echo "LOCKED: $(cat "$PRIV/lock/owner" 2>/de
 echo "initial-import $TS" > "$PRIV/lock/owner"; trap 'rm -rf "$PRIV/lock"' EXIT
 cd "$ROOT"
 sh "$PKG/remote/remote-guard.sh" "$ROOT" "$URL" initial
+[ ! -e "$PKG/SUPERSEDED" ] || { echo "REFUSED: package is superseded — $(head -1 "$PKG/SUPERSEDED")"; exit 11; }
 (cd "$PKG" && sha256sum -c SHA256SUMS >/dev/null) || { echo "package checksum mismatch"; exit 5; }
 [ -f web/app/mu-plugins/dd-migration-safety.php ] && grep -q woocommerce_superpayments_settings web/app/mu-plugins/dd-migration-safety.php || { echo "patched safety harness not deployed — run Action B first"; exit 6; }
 P=$(sed -n "s/^DB_PREFIX=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}$/\1/p" .env | tail -1); P=${P:-wp_}

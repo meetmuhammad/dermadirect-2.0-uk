@@ -5,6 +5,9 @@
 #   initial.sh <target> upload <package-dir>           copy package over SSH to the target's private dir
 #   initial.sh <target> apply  <package-dir> --kinsta-backup=<MyKinsta backup label> --confirm-replace-review-db
 #   initial.sh <target> verify <package-dir>
+#   initial.sh <target> restore <package-dir> <pre-initial-backup-file-name> --confirm-restore-review-db
+#                         (documented rollback: exact table set + files the import added/replaced)
+# A package or artifact containing a SUPERSEDED marker is refused by every step.
 # Order on the day: deploy.sh code (Action B, puts the patched safety harness + tools in place)
 # -> initial upload -> initial apply -> initial verify -> browser checks.
 set -eu
@@ -15,6 +18,7 @@ TARGET=$1; STEP=$2; PKG=${3:?package dir}; shift 3
 [ "$TARGET" = kinsta-review ] || { echo "Action A only targets kinsta-review"; exit 2; }
 SSH="ssh -p $KINSTA_REVIEW_PORT -o BatchMode=yes $KINSTA_REVIEW_SSH"
 NAME=$(basename "$PKG"); RDIR="$KINSTA_REVIEW_PRIVATE/incoming/$NAME"
+[ ! -e "$PKG/SUPERSEDED" ] || { echo "REFUSED: $PKG is superseded — $(head -1 "$PKG/SUPERSEDED")"; exit 11; }
 case "$STEP" in
 upload)
   (cd "$PKG" && shasum -a 256 -c SHA256SUMS >/dev/null) || { echo "package checksum mismatch"; exit 5; }
@@ -27,7 +31,11 @@ apply)
   [ -n "$BK" ] && [ -n "$OK" ] || { echo "apply needs --kinsta-backup=<label of a fresh MyKinsta backup> and --confirm-replace-review-db"; exit 2; }
   $SSH "mkdir -p '$KINSTA_REVIEW_PRIVATE/logs' && bash '$RDIR/remote/initial-import.sh' '$KINSTA_REVIEW_ROOT' '$KINSTA_REVIEW_URL' '$RDIR' '$KINSTA_REVIEW_PRIVATE' '$BK' 2>&1 | tee -a '$KINSTA_REVIEW_PRIVATE/logs/initial-import.log'" ;;
 verify)
-  $SSH "sh '$RDIR/remote/initial-verify.sh' '$KINSTA_REVIEW_ROOT' '$RDIR'"
+  $SSH "bash '$RDIR/remote/initial-verify.sh' '$KINSTA_REVIEW_ROOT' '$RDIR' '$KINSTA_REVIEW_URL' '$KINSTA_REVIEW_PRIVATE'"
+  "$HERE/healthcheck.sh" "$KINSTA_REVIEW_URL" ;;
+restore)
+  BKF=${1:?pre-initial backup file name}; [ "${2:-}" = --confirm-restore-review-db ] || { echo "restore needs <backup file name> --confirm-restore-review-db"; exit 2; }
+  $SSH "bash '$RDIR/remote/restore-backup.sh' '$KINSTA_REVIEW_ROOT' '$KINSTA_REVIEW_URL' '$KINSTA_REVIEW_PRIVATE' '$KINSTA_REVIEW_PRIVATE/backups/$BKF'"
   "$HERE/healthcheck.sh" "$KINSTA_REVIEW_URL" ;;
 *) echo "unknown step $STEP"; exit 2 ;;
 esac
