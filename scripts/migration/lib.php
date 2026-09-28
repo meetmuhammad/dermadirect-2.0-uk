@@ -39,30 +39,40 @@ function fail(string $msg): never
     exit(1);
 }
 
-/** DB credentials: MIG_DB_* env (local), or the Bedrock .env named by MIG_DOTENV (hosted; never printed). */
+/**
+ * DB credentials.
+ * - Hosted: MIG_BEDROCK_ROOT=<project root> loads the project's own config/application.php, so the
+ *   tools use exactly what WordPress uses (on Kinsta: SERVER_SECRET_* injected by the platform, which
+ *   take precedence over .env). Nothing is printed. connect() refuses if that database is not --dest.
+ * - Local: MIG_DB_* environment variables (least-privilege dd_migrate user).
+ */
 function db_credentials(): array
 {
-    $f = getenv('MIG_DOTENV');
-    if ($f) {
-        $env = [];
-        foreach (file($f, FILE_IGNORE_NEW_LINES) as $line) {
-            if (preg_match('/^\s*(DB_HOST|DB_USER|DB_PASSWORD)\s*=\s*(["\']?)(.*)\2\s*$/', $line, $m)) {
-                $env[$m[1]] = $m[3];
-            }
+    $root = getenv('MIG_BEDROCK_ROOT');
+    if ($root) {
+        if (!defined('DB_NAME')) {
+            require_once $root . '/vendor/autoload.php';
+            require_once $root . '/config/application.php';
+            \Roots\WPConfig\Config::apply();
         }
-        return [$env['DB_HOST'] ?? 'localhost', $env['DB_USER'] ?? '', $env['DB_PASSWORD'] ?? ''];
+        return [DB_HOST, DB_USER, DB_PASSWORD, DB_NAME];
     }
-    return [getenv('MIG_DB_HOST') ?: 'db', getenv('MIG_DB_USER') ?: '', getenv('MIG_DB_PASS') ?: ''];
+    return [getenv('MIG_DB_HOST') ?: 'db', getenv('MIG_DB_USER') ?: '', getenv('MIG_DB_PASS') ?: '', null];
 }
 
 function connect(?string $defaultDb = null): \mysqli
 {
-    [$host, $user, $pass] = db_credentials();
-    $port = null;
-    if (str_contains($host, ':')) {
-        [$host, $port] = explode(':', $host, 2);
+    [$host, $user, $pass, $appDb] = db_credentials();
+    if ($appDb !== null && $defaultDb !== null && $appDb !== $defaultDb) {
+        fail("the site's configured database is not the requested --dest ($defaultDb) — refusing");
     }
-    $db = new \mysqli($host, $user, $pass, $defaultDb ?? '', $port ? (int) $port : null);
+    $port = null;
+    $socket = null;
+    if (str_contains($host, ':')) {
+        [$host, $x] = explode(':', $host, 2);
+        ctype_digit($x) ? $port = (int) $x : $socket = $x;
+    }
+    $db = new \mysqli($host, $user, $pass, $defaultDb ?? '', $port, $socket);
     $db->set_charset('utf8mb4');
     $db->query("SET SESSION group_concat_max_len = 67108864, SESSION sql_mode = 'NO_AUTO_VALUE_ON_ZERO'");
     return $db;

@@ -40,9 +40,9 @@ TABLES=$(echo "posts postmeta users usermeta comments commentmeta woocommerce_or
 if [ -n "$HOSTED" ]; then
   . ./.deploy-targets
   SSH="ssh -p $KINSTA_REVIEW_PORT -o BatchMode=yes $KINSTA_REVIEW_SSH"; R=$KINSTA_REVIEW_ROOT; PRIV=$KINSTA_REVIEW_PRIVATE; RD=$PRIV/final-sync/$LABEL
-  HDB=$($SSH "cd '$R' && sed -n \"s/^DB_NAME=['\\\"]\\{0,1\\}\\([^'\\\"]*\\)['\\\"]\\{0,1\\}\$/\\1/p\" .env | tail -1")
+  HDB=$($SSH "cd '$R' && wp db query --skip-column-names 'SELECT DATABASE()'")   # the DB WordPress uses (Kinsta SERVER_SECRET_*)
   DEST=$HDB
-  hphp() { $SSH "cd '$R' && MIG_HOSTED=1 MIG_DOTENV='$R/.env' MIG_REPORT_DIR='$RD/reports' php scripts/migration/$*"; }
+  hphp() { $SSH "cd '$R' && MIG_HOSTED=1 MIG_BEDROCK_ROOT='$R' MIG_REPORT_DIR='$RD/reports' php scripts/migration/$*"; }
   hwp() { $SSH "cd '$R' && wp $*"; }
 fi
 SRCARGS="--src=${HOSTED:+$DEST}${HOSTED:-$SRCDB} --src-prefix=$PFX --dest=$DEST"
