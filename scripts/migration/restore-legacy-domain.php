@@ -52,6 +52,11 @@ $targets = [
     ['wp_commentmeta', 'meta_id', "comment_id IN (SELECT comment_ID FROM {$D['comments']} WHERE comment_post_ID IN ($commerce))"],
     ['wp_users', 'ID', "ID IN ($customers)"],
     ['wp_usermeta', 'umeta_id', "user_id IN ($customers)"],
+    // HPOS compatibility mirror (posts are authoritative): keep it identical to the corrected posts data.
+    ['wp_wc_orders', 'id', "id IN ($commerce)"],
+    ['wp_wc_order_addresses', 'id', "order_id IN ($commerce)"],
+    ['wp_wc_orders_meta', 'id', "order_id IN ($commerce)"],
+    ['wp_wc_order_operational_data', 'id', "order_id IN ($commerce)"],
 ];
 foreach (['wp_woocommerce_order_items' => 'order_item_id', 'wp_woocommerce_order_itemmeta' => 'meta_id', 'wp_woocommerce_payment_tokens' => 'token_id',
     'wp_woocommerce_payment_tokenmeta' => 'meta_id', 'wp_webis_pbet' => 'id', 'wp_webis_pbet_order' => 'id', 'wp_webis_pbet_order_item' => 'id',

@@ -16,6 +16,12 @@ C=dermadirect20uk-db-1
 sql() { docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -N "$@"' sh "$@"; }
 wpx() { DB_NAME=$X docker compose --profile cli run --rm -T --no-deps --entrypoint sh wpcli -c "php -d memory_limit=4G /usr/local/bin/wp $* --skip-plugins --skip-themes 2>&1 | grep -v -e WC_SA_Email -e FS_Plugin" 2>/dev/null; }
 R=./scripts/migration/run.sh
+if [ "${RESUME_AT:-}" = residual ] || [ "${RESUME_AT:-}" = after-dump ]; then
+  # Resume after an interruption past the URL rewrite: only if the scratch copy is fully transformed.
+  [ "$(sql -e "SELECT option_value FROM $X.wp_options WHERE option_name='home'")" = "$URL" ] || { echo "cannot resume: $X is not fully transformed"; exit 1; }
+  [ -z "$(sql -e "SELECT 1 FROM $X.wp_postmeta WHERE meta_value LIKE '%$FROM%' LIMIT 1")" ] || { echo "cannot resume: $X still has $FROM values"; exit 1; }
+  echo "== resuming at residual checks ($X already transformed)"
+else
 echo "== export copy of dermadirect_local"
 ./scripts/migration/snapshot.sh dump dermadirect_local "$OUT/source-dermadirect_local.sql.gz"
 ./scripts/migration/snapshot.sh restore "$OUT/source-dermadirect_local.sql.gz" $X
@@ -35,6 +41,11 @@ for t in $TABLES; do
   hit=$(sql -e "SELECT CONCAT('SELECT 1 FROM \`$X\`.\`$t\` WHERE ', GROUP_CONCAT(CONCAT('\`',column_name,'\` LIKE ''%$FROM%''') SEPARATOR ' OR '), ' LIMIT 1') FROM information_schema.columns WHERE table_schema='$X' AND table_name='$t' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext')" | sql)
   [ -n "$hit" ] && wpx search-replace "'$FROM'" "'$URL'" "$t" --all-tables --precise --report-changed-only | grep -E "Success|Error" | sed "s/^/   $t: /"
 done
+fi
+if [ "${RESUME_AT:-}" = after-dump ]; then
+  gzip -t "$OUT/db.sql.gz" && [ -f "$OUT/residuals-reported.tsv" ] && [ ! -f "$OUT/residuals.txt" ] || { echo "cannot resume after dump: dump missing/corrupt or strict residuals recorded"; exit 1; }
+  echo "== resuming after verified dump ($(du -h "$OUT/db.sql.gz" | cut -f1))"
+else
 echo "== residual checks"
 # STRICT (must be empty): legacy-owned commerce records carried by the migration.
 # REPORTED (allowed, listed in residuals-reported.tsv): pre-existing values in destination-owned
@@ -42,7 +53,7 @@ echo "== residual checks"
 txtcols() { sql -e "SELECT GROUP_CONCAT(CONCAT('\`',column_name,'\` LIKE ''%$2%''') SEPARATOR ' OR ') FROM information_schema.columns WHERE table_schema='$X' AND table_name='$1' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext')"; }
 COMMERCE="SELECT ID FROM $X.wp_posts WHERE post_type IN ('shop_order','shop_order_refund','shop_coupon')"
 CUSTOMERS="SELECT user_id FROM $X.wp_usermeta WHERE meta_key='wp_capabilities' AND (meta_value LIKE '%\"customer\"%' OR meta_value LIKE '%\"blocked_customer\"%')"
-KEYED="wp_woocommerce_order_items wp_woocommerce_order_itemmeta wp_woocommerce_payment_tokens wp_woocommerce_payment_tokenmeta wp_webis_pbet wp_webis_pbet_order wp_webis_pbet_order_item wp_woocommerce_bis_notifications wp_woocommerce_bis_notificationsmeta wp_woocommerce_bis_activity wp_gens_raf wp_gens_rafmeta wp_gens_raf_guest_referrals wp_wt_sc_coupon_lookup wp_wdr_order_item_discounts wp_pp_order_actions_log wp_trackship_shipment wp_trackship_shipment_meta wp_zorem_email_sms_log wp_stock_log wp_wc_order_stats wp_wc_order_product_lookup wp_wc_order_tax_lookup wp_wc_order_coupon_lookup wp_wc_customer_lookup"
+KEYED="wp_wc_orders wp_wc_order_addresses wp_wc_orders_meta wp_wc_order_operational_data wp_woocommerce_order_items wp_woocommerce_order_itemmeta wp_woocommerce_payment_tokens wp_woocommerce_payment_tokenmeta wp_webis_pbet wp_webis_pbet_order wp_webis_pbet_order_item wp_woocommerce_bis_notifications wp_woocommerce_bis_notificationsmeta wp_woocommerce_bis_activity wp_gens_raf wp_gens_rafmeta wp_gens_raf_guest_referrals wp_wt_sc_coupon_lookup wp_wdr_order_item_discounts wp_pp_order_actions_log wp_trackship_shipment wp_trackship_shipment_meta wp_zorem_email_sms_log wp_stock_log wp_wc_order_stats wp_wc_order_product_lookup wp_wc_order_tax_lookup wp_wc_order_coupon_lookup wp_wc_customer_lookup"
 : > "$OUT/residuals-reported.tsv"
 for needle in "$FROM" "localhost:8089" "httpsdermadirectcom.local" "/var/www/html" "DD-MIGRATION-TEST" "@example.invalid"; do
   n=0
@@ -54,12 +65,13 @@ for needle in "$FROM" "localhost:8089" "httpsdermadirectcom.local" "/var/www/htm
   for t in $KEYED; do c=$(txtcols $t "$needle"); [ -n "$c" ] && [ "$c" != NULL ] && n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.\`$t\` WHERE $c"))); done
   if [ "$n" -gt 0 ]; then echo "   STRICT RESIDUAL '$needle' in legacy-owned records: $n"; echo "$needle $n" >> "$OUT/residuals.txt"; else echo "   strict none: $needle"; fi
   Q=$(sql -e "SELECT GROUP_CONCAT(CONCAT('SELECT ''',table_name,'.',column_name,''' c, COUNT(*) n FROM \`$X\`.\`',table_name,'\` WHERE \`',column_name,'\` LIKE ''%$needle%''') SEPARATOR ' UNION ALL ') FROM information_schema.columns WHERE table_schema='$X' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext') AND table_name LIKE 'wp\\_%'")
-  echo "SELECT * FROM ($Q) x WHERE n>0" | sql | sed "s/^/$needle	/" >> "$OUT/residuals-reported.tsv"
+  echo "SELECT * FROM ($Q) x WHERE n>0" | sql | awk -v n="$needle" '{print n "\t" $0}' >> "$OUT/residuals-reported.tsv"
 done
 echo "== dump package database"
 docker exec "$C" sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --quick --hex-blob --default-character-set=utf8mb4 --skip-triggers "$1"' sh $X | gzip -6 > "$OUT/db.sql.gz"
+fi
 echo "== uploads delta (files renamed by renumbering)"
-sql -e "SELECT new_id FROM $X.dd_mig_idmap WHERE ns='posts'" | while read id; do f=web/app/uploads/generateblocks/style-$id.css; [ -f "$f" ] && mkdir -p "$OUT/uploads/generateblocks" && cp -p "$f" "$OUT/uploads/generateblocks/"; done
+sql -e "SELECT new_id FROM $X.dd_mig_idmap WHERE ns='posts'" | while read id; do f=web/app/uploads/generateblocks/style-$id.css; if [ -f "$f" ]; then mkdir -p "$OUT/uploads/generateblocks" && cp -p "$f" "$OUT/uploads/generateblocks/"; fi; done
 echo "== retained legacy plugins (private bundle)"
 tar -C web/app/plugins -czf "$OUT/plugins-retained.tar.gz" super-payments woocommerce-gateway-rules-manager product-batch-expiry-tracking-for-woocommerce woocommerce-back-in-stock-notifications wpgens-refer-a-friend-premium advanced-shipment-tracking-pro
 cp scripts/deploy/remote/*.sh "$OUT/remote/"
