@@ -44,6 +44,16 @@ return [
         '_stock_status', '_manage_stock', '_backorders', '_low_stock_amount', '_tax_status', '_tax_class', 'total_sales',
         '_ywbc_barcode_value', '_ywbc_barcode_display_value', '_ywbc_barcode_protocol', 'ywbc_barcode_display_value_custom_field'],
 
+    // Approved SKU changes for products whose identity is proven by other evidence. Applied only when
+    // the destination SKU equals 'from' and legacy's equals 'to' exactly; otherwise reported as ambiguous.
+    // 689012: same ID/type/title; at the 2026-09-08 clone legacy had it as a draft with the 'from' SKU
+    // (verified in DevKinsta dermadirect_UK_20); legacy re-SKU'd, repriced and published it on
+    // 2026-09-15. No other product uses either SKU; no order items reference it. Status stays on the
+    // review list (destination draft kept pending Paul).
+    'approved_sku_changes' => [
+        689012 => ['from' => '00919944-919945', 'to' => '06890124'],
+    ],
+
     // URL/path rewrite applied to every legacy value the sync copies (serialization-safe), and used
     // to compare records modulo that rewrite. 'common' mirrors the original import's Bedrock layout
     // change; the profile maps the legacy base URL to the destination's for that environment.

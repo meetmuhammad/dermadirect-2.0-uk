@@ -75,6 +75,8 @@ async function visit(page, name, url, { viewport = 'desktop', shot = true } = {}
       text: main.innerText.replace(/\s+/g, ' ').replace(/\d+\s*hrs\s*\d+\s*mins\s*\d+\s*sec/gi, 'Nhrs Nmins Nsec').trim().slice(0, 20000),
       acfBlocks: document.querySelectorAll('[class*="wp-block-acf"], [data-block], .acf-block').length,
       variations: document.querySelectorAll('form.variations_form select').length,
+      tabs: [...document.querySelectorAll('ul.subsubsub li a')].map((a) => a.innerText.replace(/\s+/g, ' ').trim()),
+      displaying: (document.querySelector('.tablenav.top .displaying-num') || {}).innerText || null,
       gallery: document.querySelectorAll('.woocommerce-product-gallery__image, .swiper-slide img').length,
     };
   }));
@@ -133,6 +135,16 @@ try {
   for (const [name, url] of ADMIN) await visit(ap, name, url);
   if (args.orderid) await visit(ap, 'admin-order-' + args.orderid, `/wp/wp-admin/post.php?post=${args.orderid}&action=edit`);
   await actx.close();
+  // After cleanup: the synthetic test customers must no longer be able to log in.
+  if (args['expect-no-test-customers']) {
+    const c = env('secrets/rehearsal-customer.env');
+    const x = await browser.newContext(); await instrument(x); const xp = await x.newPage();
+    await xp.goto(BASE + '/my-account/', { waitUntil: 'load' });
+    await xp.fill('#username', c.RH_CUSTOMER_LOGIN); await xp.fill('#password', c.RH_CUSTOMER_PASS);
+    await Promise.all([xp.waitForNavigation({ waitUntil: 'load' }), xp.click('button[name="login"]')]);
+    report.testCustomerRejected = !(await xp.$('a[href*="customer-logout"]'));
+    await x.close();
+  }
   // Customer (after sync): test account created on the source copy with a known password
   if (args.customer) {
     const c = env('secrets/rehearsal-customer.env');
@@ -178,7 +190,7 @@ report.summary = {
   linksChecked: Object.keys(report.links).length, badLinks,
 };
 fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify(report, null, 2));
-console.log(JSON.stringify(report.summary, null, 1), '\nadminLogin', report.adminLogin, 'checkout', JSON.stringify(report.checkout), 'customerLogin', report.customerLogin ?? '-');
+console.log(JSON.stringify(report.summary, null, 1), '\norders tabs', JSON.stringify(report.pages['admin-orders-desktop']?.tabs), 'list', report.pages['admin-orders-desktop']?.displaying, '\ntestCustomerRejected', report.testCustomerRejected, '\nadminLogin', report.adminLogin, 'checkout', JSON.stringify(report.checkout), 'customerLogin', report.customerLogin ?? '-');
 
 // Before/after comparison of rendered content (same pages, same viewport)
 if (args.compare) {

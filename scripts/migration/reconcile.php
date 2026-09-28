@@ -116,7 +116,9 @@ if ($before) {
     $postsDiff = (int) one($db, "SELECT COUNT(*) FROM `$before`.wp_posts b LEFT JOIN `$dest`.wp_posts a ON a.ID=b.ID AND a.post_modified_gmt=b.post_modified_gmt AND a.post_content=b.post_content AND a.post_title=b.post_title AND a.post_status=b.post_status AND a.post_name=b.post_name AND a.post_parent=b.post_parent AND a.post_excerpt=b.post_excerpt AND a.guid=b.guid WHERE b.post_type NOT IN ($commerce) AND a.ID IS NULL");
     $newPosts = rows($db, "SELECT a.post_type, COUNT(*) n FROM `$dest`.wp_posts a LEFT JOIN `$before`.wp_posts b ON b.ID=a.ID WHERE a.post_type NOT IN ($commerce) AND b.ID IS NULL AND a.ID NOT IN ($placeholders) GROUP BY 1");
     $commercial = $commercialIn;
-    $metaSide = fn ($X) => "SELECT pm.post_id, pm.meta_key, MD5(pm.meta_value) h FROM `$X`.wp_postmeta pm JOIN `$before`.wp_posts p ON p.ID=pm.post_id AND p.post_type NOT IN ($commerce) WHERE NOT (p.post_type IN ('product','product_variation') AND pm.meta_key IN ($commercial)) AND pm.meta_key NOT IN ('_edit_lock')";  // _edit_lock: editor-session stamp, not content
+    $approvedIds = implode(',', array_map('intval', array_keys(cfg()['approved_sku_changes']))) ?: '0';
+    $skuApproved = " AND NOT (pm.meta_key='_sku' AND pm.post_id IN ($approvedIds))"; // approved SKU changes (config)
+    $metaSide = fn ($X) => "SELECT pm.post_id, pm.meta_key, MD5(pm.meta_value) h FROM `$X`.wp_postmeta pm JOIN `$before`.wp_posts p ON p.ID=pm.post_id AND p.post_type NOT IN ($commerce) WHERE NOT (p.post_type IN ('product','product_variation') AND pm.meta_key IN ($commercial)) AND pm.meta_key NOT IN ('_edit_lock')" . $skuApproved;  // _edit_lock: editor-session stamp, not content
     $metaDiff = (int) one($db, "SELECT COUNT(*) FROM (SELECT post_id, meta_key, h, COUNT(*) c FROM ({$metaSide($before)}) x GROUP BY 1,2,3) b LEFT JOIN (SELECT post_id, meta_key, h, COUNT(*) c FROM ({$metaSide($dest)}) y GROUP BY 1,2,3) a ON a.post_id=b.post_id AND a.meta_key=b.meta_key AND a.h=b.h AND a.c=b.c WHERE a.post_id IS NULL");
     $metaAdded = (int) one($db, "SELECT COUNT(*) FROM (SELECT post_id, meta_key, h FROM ({$metaSide($dest)}) y) a LEFT JOIN (SELECT post_id, meta_key, h FROM ({$metaSide($before)}) x) b ON b.post_id=a.post_id AND b.meta_key=a.meta_key AND b.h=a.h WHERE b.post_id IS NULL");
     $optVolatile = "b.option_name NOT LIKE '\\_transient%' AND b.option_name NOT LIKE '\\_site\\_transient%' AND b.option_name NOT IN ('cron','action_scheduler_lock_async-request-runner','dd_safety_blocked_log','rewrite_rules','generateblocks_dynamic_css_time') AND b.option_name NOT LIKE 'wc\\_%\\_session%'";
@@ -131,7 +133,11 @@ if ($before) {
         'action_scheduler_migration_status', 'woocommerce_product_lookup_table_is_generating'];
     $res['options_changed_by_application_phase'] = array_values(array_intersect($optDiff, $appPhase));
     $optDiff = array_values(array_diff($optDiff, $appPhase));
-    $check('protected content: options unchanged (caches/queues excluded; approved plugin-activation options listed)', !$optDiff, ['unexpected' => $optDiff, 'approved_application_phase' => $res['options_changed_by_application_phase']]);
+    // WordPress/plugin runtime state written by admin sessions and blocked outbound calls — not content.
+    $runtime = '/^(recovery_keys|recovery_mode_email_last_sent|external_updates-.*|ure_admin_(sub_)?menu_.*|wt_created_.*document_count|wc_bis_notice_options|edd_sl_failed_http_.*)$/';
+    $res['options_runtime_state_changed'] = array_values(array_filter($optDiff, fn ($o) => preg_match($runtime, $o)));
+    $optDiff = array_values(array_filter($optDiff, fn ($o) => !preg_match($runtime, $o)));
+    $check('protected content: options unchanged (caches/queues excluded; approved plugin-activation options listed)', !$optDiff, ['unexpected' => $optDiff, 'approved_application_phase' => $res['options_changed_by_application_phase'], 'runtime_state' => $res['options_runtime_state_changed']]);
     $check('protected content: terms, term meta, non-visibility term relationships unchanged', $termDiff === 0 && $relDiff === 0, ['terms' => $termDiff, 'relationships' => $relDiff]);
 }
 

@@ -4,7 +4,10 @@
 # table; the same files and tools are used locally and on Kinsta (where it lives inside the site DB).
 #
 # LOCAL (preparation / rehearsal against a copy of the destination):
-#   final-sync.sh snapshot  <label> [--from-dump=<legacy.sql.gz>]   legacy -> recovery/final-sync/<label>/
+#   final-sync.sh snapshot  <label> [--from-dump=<f>|--from-legacy-kinsta]  legacy -> recovery/final-sync/<label>/
+#                           default source: the DevKinsta legacy DB (pull a fresh copy in DevKinsta first);
+#                           --from-legacy-kinsta: read-only export over SSH from legacy Kinsta (use after the freeze)
+#   final-sync.sh backup    <label> [--dest=<db>|--hosted]           verified pre-apply backup (required by apply)
 #   final-sync.sh pull-dest <label>                                  read-only copy of the hosted DB -> dd_rh_dest_<label>
 #   final-sync.sh preflight <label> [--dest=<db>]
 #   final-sync.sh plan      <label> [--dest=<db>]                    dry run, writes nothing
@@ -20,19 +23,20 @@
 set -eu
 cd "$(dirname "$0")/../.."
 CMD=${1:?command}; LABEL=${2:?label}; shift 2
-HOSTED=""; DEST=dd_rh_dest; CONFIRM=""; BACKUP=""; FROMDUMP=""
+HOSTED=""; DEST=dd_rh_dest; CONFIRM=""; BACKUP=""; FROMDUMP=""; FROMLEGACY=""
 for a in "$@"; do case "$a" in
-  --hosted) HOSTED=1;; --dest=*) DEST=${a#*=};; --confirm-dest=*) CONFIRM=${a#*=};; --backup=*) BACKUP=${a#*=};; --from-dump=*) FROMDUMP=${a#*=};;
+  --hosted) HOSTED=1;; --dest=*) DEST=${a#*=};; --confirm-dest=*) CONFIRM=${a#*=};; --backup=*) BACKUP=${a#*=};; --from-dump=*) FROMDUMP=${a#*=};; --from-legacy-kinsta) FROMLEGACY=1;;
   *) echo "unknown option $a"; exit 2;; esac; done
 DIR=recovery/final-sync/$LABEL; mkdir -p "$DIR/reports"; chmod 700 recovery/final-sync "$DIR"
 C=dermadirect20uk-db-1; SRCDB=dd_rh_src_$(echo "$LABEL" | tr -c 'a-z0-9_\n' '_'); PFX=lgcy_
 sql() { docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -N "$@"' sh "$@"; }
-# Tables the sync and reconcile read (nothing else leaves the legacy site).
-TABLES="posts postmeta users usermeta comments commentmeta woocommerce_order_items woocommerce_order_itemmeta terms term_taxonomy term_relationships
+# Tables the sync and reconcile read (nothing else leaves the legacy site). Normalised to single
+# spaces: membership tests below rely on " name " matching.
+TABLES=$(echo "posts postmeta users usermeta comments commentmeta woocommerce_order_items woocommerce_order_itemmeta terms term_taxonomy term_relationships
  wc_order_stats wc_order_product_lookup wc_order_tax_lookup wc_order_coupon_lookup wc_customer_lookup woocommerce_payment_tokens woocommerce_payment_tokenmeta
  webis_pbet webis_pbet_order webis_pbet_order_item woocommerce_bis_notifications woocommerce_bis_notificationsmeta woocommerce_bis_activity
  gens_raf gens_rafmeta gens_raf_guest_referrals wt_sc_coupon_lookup wdr_order_item_discounts pp_order_actions_log trackship_shipment
- trackship_shipment_meta zorem_email_sms_log stock_log woocommerce_downloadable_product_permissions"
+ trackship_shipment_meta zorem_email_sms_log stock_log woocommerce_downloadable_product_permissions" | tr -s ' \n\t' '   ')
 if [ -n "$HOSTED" ]; then
   . ./.deploy-targets
   SSH="ssh -p $KINSTA_REVIEW_PORT -o BatchMode=yes $KINSTA_REVIEW_SSH"; R=$KINSTA_REVIEW_ROOT; PRIV=$KINSTA_REVIEW_PRIVATE; RD=$PRIV/final-sync/$LABEL
@@ -56,21 +60,34 @@ snapshot)
   if [ -n "$FROMDUMP" ]; then
     shasum -a 256 -c "$FROMDUMP.sha256" >/dev/null; SHA=$(cut -d' ' -f1 "$FROMDUMP.sha256"); ORIGIN="dump:$(basename "$FROMDUMP")"
     gunzip -c "$FROMDUMP" | docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" "$1"' sh "$SRCDB"
+  elif [ -n "$FROMLEGACY" ]; then
+    . ./.deploy-targets   # LEGACY_SSH / LEGACY_PORT / LEGACY_ROOT (read-only use)
+    LS="ssh -p ${LEGACY_PORT:?} -o BatchMode=yes ${LEGACY_SSH:?}"
+    WT=""; for t in $TABLES; do WT="$WT,wp_$t"; done
+    HOME_URL=$($LS "cd '${LEGACY_ROOT:?}' && wp option get home --skip-plugins --skip-themes"); THEME=$($LS "cd '$LEGACY_ROOT' && wp option get stylesheet --skip-plugins --skip-themes")
+    $LS "cd '$LEGACY_ROOT' && wp db export - --tables=${WT#,} --single-transaction --quick --skip-triggers" | gzip -1 > "$DIR/legacy-raw.sql.gz"
+    SHA=$(shasum -a 256 "$DIR/legacy-raw.sql.gz" | cut -d' ' -f1); ORIGIN="legacy-kinsta:$LEGACY_SSH"
+    gunzip -c "$DIR/legacy-raw.sql.gz" | docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" "$1"' sh "$SRCDB"
+    rm -f "$DIR/legacy-raw.sql.gz"
   else
     LP=$(sed -n "s/.*'DB_PASSWORD', *'\([^']*\)'.*/\1/p" /Users/Ammar/development/DevKinsta/public/httpsdermadirectcom/wp-config.php)
     LDB=$(sed -n "s/.*'DB_NAME', *'\([^']*\)'.*/\1/p" /Users/Ammar/development/DevKinsta/public/httpsdermadirectcom/wp-config.php)
     WT=""; for t in $TABLES; do WT="$WT wp_$t"; done
+    HOME_URL=$(docker exec -e MYSQL_PWD="$LP" devkinsta_db mysql -uroot -N -e "SELECT option_value FROM $LDB.wp_options WHERE option_name='home'")
+    THEME=$(docker exec -e MYSQL_PWD="$LP" devkinsta_db mysql -uroot -N -e "SELECT option_value FROM $LDB.wp_options WHERE option_name='stylesheet'")
     docker exec -e MYSQL_PWD="$LP" devkinsta_db sh -c "mysqldump -uroot --single-transaction --quick --hex-blob --default-character-set=utf8mb4 --skip-triggers $LDB $WT" | gzip -1 > "$DIR/legacy-raw.sql.gz"
     SHA=$(shasum -a 256 "$DIR/legacy-raw.sql.gz" | cut -d' ' -f1); ORIGIN="devkinsta:$LDB"
     gunzip -c "$DIR/legacy-raw.sql.gz" | docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" "$1"' sh "$SRCDB"
     rm -f "$DIR/legacy-raw.sql.gz"
   fi
-  HOME_URL=$(sql -e "SELECT option_value FROM \`$SRCDB\`.wp_options WHERE option_name='home'" 2>/dev/null || true)
-  THEME=$(sql -e "SELECT option_value FROM \`$SRCDB\`.wp_options WHERE option_name='stylesheet'" 2>/dev/null || true)
-  [ -n "$HOME_URL" ] || HOME_URL=https://httpsdermadirectcom.local:8443
+  [ -n "${HOME_URL:-}" ] || HOME_URL=$(sql -e "SELECT option_value FROM \`$SRCDB\`.wp_options WHERE option_name='home'" 2>/dev/null || true)
+  [ -n "${THEME:-}" ] || THEME=$(sql -e "SELECT option_value FROM \`$SRCDB\`.wp_options WHERE option_name='stylesheet'" 2>/dev/null || true)
+  [ -n "$HOME_URL" ] || { echo "cannot determine the legacy home URL of the source — refusing"; exit 1; }
+  case "$THEME" in porto*) ;; *) echo "source stylesheet is '$THEME', not the legacy Porto theme — refusing"; exit 1;; esac
   for t in $(sql -e "SELECT table_name FROM information_schema.tables WHERE table_schema='$SRCDB'"); do
     case " $TABLES " in *" ${t#wp_} "*) sql -e "RENAME TABLE \`$SRCDB\`.\`$t\` TO \`$SRCDB\`.\`$PFX${t#wp_}\`";; *) sql -e "DROP TABLE \`$SRCDB\`.\`$t\`";; esac
   done
+  for t in $TABLES; do [ -n "$(sql -e "SELECT 1 FROM information_schema.tables WHERE table_schema='$SRCDB' AND table_name='$PFX$t'")" ] || { echo "snapshot is missing legacy table wp_$t — refusing"; exit 1; }; done
   sql -e "CREATE TABLE \`$SRCDB\`.${PFX}dd_snapshot (k VARCHAR(64) PRIMARY KEY, v TEXT) ENGINE=InnoDB;
     INSERT INTO \`$SRCDB\`.${PFX}dd_snapshot VALUES ('label','$LABEL'),('origin','$ORIGIN'),('exported_at_utc','$TS'),('raw_sha256','$SHA'),
     ('legacy_home','$HOME_URL'),('legacy_stylesheet','${THEME:-unknown}'),
@@ -83,6 +100,14 @@ snapshot)
   if gunzip -c "$DIR/source-lgcy.sql.gz" | grep -E '^(CREATE TABLE|DROP TABLE IF EXISTS|INSERT INTO) `' | grep -vqE "^(CREATE TABLE|DROP TABLE IF EXISTS|INSERT INTO) \`$PFX"; then echo "package contains non-$PFX tables — refusing"; exit 1; fi
   sql -e "SELECT k, v FROM \`$SRCDB\`.${PFX}dd_snapshot" | tee "$DIR/snapshot-identity.tsv"
   echo "SNAPSHOT READY: local source $SRCDB (prefix $PFX), package $DIR/source-lgcy.sql.gz" ;;
+backup)
+  if [ -n "$HOSTED" ]; then
+    B="$RD/pre-apply-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"
+    $SSH "mkdir -p '$RD' && cd '$R' && wp db export - --single-transaction --quick | gzip -6 > '$B' && gzip -t '$B' && sha256sum '$B' > '$B.sha256' && ls -l '$B'"
+  else
+    B="$DIR/pre-apply-$DEST-$(date -u +%Y%m%dT%H%M%SZ).sql.gz"; ./scripts/migration/snapshot.sh dump "$DEST" "$B"
+  fi
+  echo "backup ready — use: --backup=$B" ;;
 pull-dest)
   [ -n "$HOSTED" ] || { . ./.deploy-targets; }
   T=dd_rh_dest_$(echo "$LABEL" | tr -c 'a-z0-9_\n' '_')

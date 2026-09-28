@@ -27,7 +27,7 @@ PROTECT="--filter=P_/.env* --filter=P_/.git/ --filter=P_/web/app/uploads/ --filt
 case "$ACTION" in
 code)
   ART=${1:?artifact.tar.gz}
-  shasum -a 256 -c "$ART.sha256" >/dev/null || { echo "artifact checksum mismatch"; exit 5; }
+  (cd "$(dirname "$ART")" && shasum -a 256 -c "$(basename "$ART").sha256" >/dev/null) || { echo "artifact checksum mismatch"; exit 5; }
   lock; trap unlock EXIT
   if [ "${TARGET%%:*}" != local ]; then
     scp -P "$KINSTA_REVIEW_PORT" -q "$HERE/remote/remote-guard.sh" "$KINSTA_REVIEW_SSH:$PRIV/remote-guard.sh"
@@ -49,7 +49,8 @@ code)
 rollback-code)
   BK=${1:?release backup path on target}
   lock; trap unlock EXIT
-  remote "test -f '$BK' && cd '$ROOT' && tar -xzf '$BK' && echo restored code from $BK"
+  # Exact restore of the archived code tree (same protected paths as a deploy; never the database).
+  remote "test -f '$BK' && T=\$(mktemp -d) && tar -xzf '$BK' -C \"\$T\" && rsync -a --delete $PROTECT \"\$T/\" '$ROOT/' && rm -rf \"\$T\" && echo restored code from $BK"
   [ "${TARGET%%:*}" = local ] || "$HERE/healthcheck.sh" "$URL" ;;
 initial)    exec "$HERE/initial.sh" "$TARGET" "$@" ;;
 final-sync) exec "$HERE/../migration/final-sync.sh" "$@" ;;

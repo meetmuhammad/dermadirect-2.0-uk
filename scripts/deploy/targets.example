@@ -5,3 +5,8 @@ KINSTA_REVIEW_PORT="<port>"
 KINSTA_REVIEW_ROOT="/www/dermadirect20uk_672/public"          # Bedrock project root (docroot is ./web)
 KINSTA_REVIEW_PRIVATE="/www/dermadirect20uk_672/private/dd-deploy"
 KINSTA_REVIEW_URL="https://dermadirect20uk.kinsta.cloud"
+
+# Legacy (read-only use by final-sync.sh snapshot --from-legacy-kinsta)
+LEGACY_SSH="<user>@<host>"
+LEGACY_PORT="<port>"
+LEGACY_ROOT="/www/<site>/public"

@@ -28,6 +28,7 @@ const FK_COLUMNS = [
 const OTHER_NS_COLUMNS = [
     'wp_woocommerce_order_items.order_item_id', 'wp_woocommerce_order_itemmeta.order_item_id', 'wp_wc_order_product_lookup.order_item_id',
     'wp_wdr_order_item_discounts.order_item_id', 'wp_comments.comment_ID', 'wp_automatewoo_log_meta.log_id', 'wp_gens_rafmeta.gens_raf_id',
+    'wp_wpmailsmtp_email_tracking_links.email_log_id', // FK to wp_wpmailsmtp_emails_log.id
 ];
 
 /**
@@ -390,8 +391,17 @@ function apply(\mysqli $db, string $dest, TableRef $src, string $run, array $can
             }
             $n++;
         }
-        // 2) foreign keys and 3) primary keys, set-based through the persisted map
-        $M = "`$dest`.dd_mig_idmap";
+        // 2) foreign keys and 3) primary keys, set-based through THIS RUN's mappings only.
+        // (Joining the whole persisted map would re-apply earlier mappings to legacy records that now
+        // legitimately occupy the vacated IDs — found by tests/guards_test.sh on a second run.)
+        q($db, 'DROP TEMPORARY TABLE IF EXISTS dd_mig_cur_map');
+        q($db, 'CREATE TEMPORARY TABLE dd_mig_cur_map (ns VARCHAR(32) NOT NULL, old_id BIGINT UNSIGNED NOT NULL, new_id BIGINT UNSIGNED NOT NULL, PRIMARY KEY (ns, old_id))');
+        foreach ($maps as $ns => $map) {
+            foreach (array_chunk($map, 500, true) as $chunk) {
+                q($db, 'INSERT INTO dd_mig_cur_map VALUES ' . implode(',', array_map(fn ($o, $n) => '(' . e($db, $ns) . ",$o,$n)", array_keys($chunk), $chunk)));
+            }
+        }
+        $M = 'dd_mig_cur_map';
         $fk = [
             "UPDATE $P x JOIN $M m ON m.ns='posts' AND m.old_id=x.post_parent SET x.post_parent=m.new_id",
             "UPDATE $PM x JOIN $M m ON m.ns='posts' AND m.old_id=x.post_id SET x.post_id=m.new_id",

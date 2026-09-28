@@ -37,11 +37,13 @@ if [ "$FROM" != "$TO" ]; then
     wpq search-replace "'$FROM'" "'$TO'" "$t" --all-tables --skip-columns=guid --precise --report-changed-only | grep -E "Success|Error" | sed "s/^/   $t: /"
   done
 fi
+if [ "$FROM" != "$TO" ]; then
 echo "== residual scan for $FROM (non-GUID)"
 Q=$(sql -e "SELECT GROUP_CONCAT(CONCAT('SELECT ''',table_name,'.',column_name,''' c, COUNT(*) n FROM \`$TARGET\`.\`',table_name,'\` WHERE \`',column_name,'\` LIKE ''%$FROM%''') SEPARATOR ' UNION ALL ') FROM information_schema.columns WHERE table_schema='$TARGET' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext') AND column_name<>'guid'")
 LEFT=$(echo "SELECT * FROM ($Q) x WHERE n>0" | sql)
 [ -z "$LEFT" ] || { echo "RESIDUAL $FROM FOUND:"; echo "$LEFT"; exit 1; }
 echo "   none"
+fi
 echo "== flush + start web"; wpq cache flush >/dev/null; wpq rewrite flush >/dev/null
 docker compose up -d --no-deps --force-recreate web >/dev/null 2>&1
 sleep 4; echo "   web serves DB: $(docker exec dermadirect20uk-web-1 printenv DB_NAME)"

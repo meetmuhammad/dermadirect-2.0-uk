@@ -400,9 +400,15 @@ final class Sync
             FROM {$ST['posts']} s JOIN `$D`.wp_posts d ON d.ID=s.ID AND d.post_type=s.post_type WHERE s.post_type IN ('product','product_variation')");
         $keys = implode(',', array_map(fn ($k) => e($this->db, $k), cfg()['product_commercial']));
         $ex = ['ambiguous' => [], 'status_differs' => []];
+        $skuChanges = [];
         $verified = [];
         foreach ($pairs as $p) {
-            if ((string) $p['ssku'] !== (string) $p['dsku'] || ($p['type'] === 'product_variation' && $p['sp'] !== $p['dp'])) {
+            $approved = cfg()['approved_sku_changes'][(int) $p['id']] ?? null;
+            $skuApproved = $approved && $approved['from'] === (string) $p['dsku'] && $approved['to'] === (string) $p['ssku'];
+            if ($skuApproved) {
+                $skuChanges[] = ['id' => (int) $p['id'], 'key' => '_sku', 'legacy' => $p['ssku'], 'destination_before' => $p['dsku']];
+            }
+            if ((!$skuApproved && (string) $p['ssku'] !== (string) $p['dsku']) || ($p['type'] === 'product_variation' && $p['sp'] !== $p['dp'])) {
                 $ex['ambiguous'][] = ['id' => (int) $p['id'], 'type' => $p['type'], 'reason' => (string) $p['ssku'] !== (string) $p['dsku'] ? 'SKU differs' : 'variation parent differs'];
                 continue;
             }
@@ -423,6 +429,7 @@ final class Sync
                 $changes[] = ['id' => (int) $d['id'], 'key' => $d['meta_key'], 'legacy' => $d['sv'], 'destination_before' => $d['dv']];
             }
         }
+        $changes = array_merge($skuChanges, $changes);
         if ($apply && $changes) {
             q($this->db, 'START TRANSACTION');
             foreach ($changes as $c) {
@@ -637,6 +644,19 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     $cand = candidates($db, $dest, $src);
     if ($cand['posts'] || $cand['users']) {
         fail('new ID collisions: ' . count($cand['posts']) . ' destination posts / ' . count($cand['users']) . ' users sit in legacy ID space — run renumber.php audit/apply first');
+    }
+    // Every table the sync reads must exist in the source (fail before writing anything).
+    $need = ['posts', 'postmeta', 'users', 'usermeta', 'comments', 'commentmeta', 'woocommerce_order_items', 'woocommerce_order_itemmeta', 'terms',
+        'term_taxonomy', 'term_relationships', 'wc_order_stats', 'wc_order_product_lookup', 'wc_order_tax_lookup', 'wc_order_coupon_lookup', 'wc_customer_lookup'];
+    foreach (array_keys(KEYED_TABLES) as $kt) {
+        if ((int) one($db, 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=' . e($db, $dest) . ' AND table_name=' . e($db, $kt))) {
+            $need[] = $kt;
+        }
+    }
+    $present = array_column(rows($db, 'SELECT table_name t FROM information_schema.tables WHERE table_schema=' . e($db, $src->schema)), 't');
+    $missing = array_values(array_filter($need, fn ($t) => !in_array($src->name($t), $present, true)));
+    if ($missing) {
+        fail('source is missing required tables: ' . implode(', ', array_map(fn ($t) => $src->name($t), $missing)));
     }
     $identity = source_identity($db, $src);
     $run = start_run($db, $dest, "sync-$mode", $a);
