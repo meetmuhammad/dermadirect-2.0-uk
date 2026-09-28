@@ -44,7 +44,11 @@ async function instrument(context) {
       const resp = await route.fetch({ url: MAP + u.pathname + u.search, headers: await req.allHeaders(), maxRedirects: 0 }).catch(() => null);
       return resp ? route.fulfill({ response: resp }) : route.abort('failed');
     }
-    if (['localhost', '127.0.0.1'].includes(u.hostname)) return route.continue();
+    if (['localhost', '127.0.0.1'].includes(u.hostname)) {
+      // Simulated hosted site: a page that points at a local address is a defect (wrong site URL).
+      if (MAP) { report.localRequests = (report.localRequests || 0) + 1; return route.abort('blockedbyclient'); }
+      return route.continue();
+    }
     if (!MAP && u.hostname === BASEHOST) return route.continue(); // hosted QA: only the site under test
     report.blockedExternal[u.hostname] = (report.blockedExternal[u.hostname] || 0) + 1;
     return route.abort('blockedbyclient');
@@ -168,6 +172,18 @@ try {
     report.customerLogin = !!(await cp.$('.woocommerce-MyAccount-navigation, a[href*="customer-logout"]'));
     const orders = await visit(cp, 'customer-orders', '/my-account/orders/');
     report.customerOrderLinks = orders.links.filter((l) => /view-order/.test(l));
+    // Scope: every order listed must be one of the customer's own (--expect-orders=id,id,...), and another
+    // customer's order (--foreign-order=id) must not render.
+    if (args['expect-orders']) {
+      const own = new Set(String(args['expect-orders']).split(','));
+      const listed = [...new Set(report.customerOrderLinks.map((l) => (l.match(/view-order\/(\d+)/) || [])[1]).filter(Boolean))];
+      report.customerOrdersListed = listed.length;
+      report.customerOrdersAllOwn = listed.length > 0 && listed.every((id) => own.has(id));
+    }
+    if (args['foreign-order']) {
+      await visit(cp, 'customer-foreign-order', `/my-account/view-order/${args['foreign-order']}/`, { shot: false });
+      report.foreignOrderDenied = !(await cp.$('.woocommerce-order-details, .woocommerce-table--order-details'));
+    }
     if (report.customerOrderLinks[0]) {
       const vo = await visit(cp, 'customer-view-order', new URL(report.customerOrderLinks[0]).pathname);
       report.invoiceLinks = vo.links.filter((l) => /invoice|print|pdf/i.test(l));

@@ -72,6 +72,11 @@ docker exec "$C" sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-tr
 WANT=$(sql -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$X' AND table_type='BASE TABLE'")
 gunzip -c "$OUT/db.sql.gz" | tail -c 300 | grep -q -- '-- Dump completed' && [ "$(gunzip -c "$OUT/db.sql.gz" | grep -c '^CREATE TABLE')" -ge "$WANT" ] || { echo "PACKAGE DUMP INCOMPLETE"; rm -f "$OUT/db.sql.gz"; exit 1; }
 fi
+echo "== legacy-owned values unchanged by packaging (emails, notes, corrected legacy domain)"
+scripts/deploy/check-legacy-values.sh dermadirect_local "$X" "$FROM" "$URL" > "$OUT/legacy-values-check.txt" || { cat "$OUT/legacy-values-check.txt"; echo "PACKAGE REFUSED: packaging changed legacy-owned values"; exit 1; }
+cat "$OUT/legacy-values-check.txt"
+echo "== account identity digest (for identity-based staff restore on the server; SHA-256, no personal data)"
+$R restore-staff.php identity --dest=$X --out="/var/www/html/$OUT/users-identity.tsv"; chmod 600 "$OUT/users-identity.tsv"
 echo "== uploads delta (files renamed by renumbering)"
 sql -e "SELECT new_id FROM $X.dd_mig_idmap WHERE ns='posts'" | while read id; do f=web/app/uploads/generateblocks/style-$id.css; if [ -f "$f" ]; then mkdir -p "$OUT/uploads/generateblocks" && cp -p "$f" "$OUT/uploads/generateblocks/"; fi; done
 echo "== retained legacy plugins (private bundle)"

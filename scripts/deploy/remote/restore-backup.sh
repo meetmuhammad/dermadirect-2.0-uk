@@ -20,5 +20,15 @@ echo "== drop tables absent from the backup"
 for t in $(wp db query --skip-column-names "SELECT table_name FROM information_schema.tables WHERE table_schema=DATABASE()"); do
   printf '%s\n' "$KEEP" | grep -qx "$t" || { wp db query "DROP TABLE \`$t\`"; echo "   dropped $t"; }
 done
+# files the import added are removed; files it replaced are put back (recorded by initial-import.sh)
+TS=$(basename "$BK" .sql.gz | sed 's/^pre-initial-//'); D=$(dirname "$BK")
+if [ -f "$D/files-added-$TS.txt" ]; then
+  while read -r f; do case "$f" in web/app/plugins/?*|web/app/uploads/?*) rm -rf "./$f"; echo "   removed $f";; *) echo "   skipped unexpected path $f";; esac; done < "$D/files-added-$TS.txt"
+fi
+if [ -f "$D/files-replaced-$TS.tar.gz" ]; then
+  while read -r f; do case "$f" in web/app/plugins/?*|web/app/uploads/?*) rm -rf "./$f";; esac; done < "$D/files-replaced-$TS.list"
+  tar -xzf "$D/files-replaced-$TS.tar.gz"; echo "   put back $(wc -l < "$D/files-replaced-$TS.list") paths the import replaced"
+fi
+[ -f "$PRIV/last-import" ] && [ "$(cat "$PRIV/last-import")" = "$TS" ] && rm -f "$PRIV/last-import"
 wp cache flush; wp rewrite flush; (wp kinsta cache purge --all 2>/dev/null || true)
 echo "RESTORED $(basename "$BK")"
