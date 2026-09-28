@@ -45,7 +45,11 @@ if MIG_HOSTED=1 MIG_BEDROCK_ROOT="$ROOT" MIG_REPORT_DIR="$PRIV/reports" php scri
 
 echo "== isolation"
 ck "active webhooks" "$(q "SELECT COUNT(*) FROM ${P}wc_webhooks WHERE status='active'")" 0
-ck "pending scheduled actions" "$(q "SELECT COUNT(*) FROM ${P}actionscheduler_actions WHERE status='pending'")" 0
+MAXA=$(cat "$PRIV/backups/max-action-$TS.txt")
+ck "carried-over scheduled actions still cancelled (pending with ID <= $MAXA)" "$(q "SELECT COUNT(*) FROM ${P}actionscheduler_actions WHERE status='pending' AND action_id<=$MAXA")" 0
+ck "queued webhook deliveries" "$(q "SELECT COUNT(*) FROM ${P}actionscheduler_actions WHERE status='pending' AND hook='woocommerce_deliver_webhook_async'")" 0
+ck "scheduled actions executed since the import" "$(q "SELECT COUNT(*) FROM ${P}actionscheduler_actions WHERE action_id>$MAXA AND status IN ('complete','failed','in-progress')")" 0
+echo "info self-scheduled since the import (pending, cannot run while the harness is on): $(q "SELECT COALESCE(GROUP_CONCAT(DISTINCT hook),'none') FROM ${P}actionscheduler_actions WHERE action_id>$MAXA AND status='pending'")"
 R=$(wp eval '
   $bad = [];
   foreach (["woocommerce_superpayments_settings","woocommerce_stripe_settings","woocommerce_stripe_cc_settings"] as $o) {

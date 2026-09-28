@@ -64,6 +64,9 @@ wp db import "$PRIV/backups/hosted-options-$TS.sql"
 wp db query "UPDATE ${P}options SET option_value='$URL' WHERE option_name IN ('home','siteurl')"
 echo "== neutralise integrations (again, after settings re-apply)"
 mig neutralize.php apply
+# every action that exists now came with the package and is cancelled; anything newer is self-scheduled by
+# plugins when WordPress boots (initial-verify.sh lists those; the harness keeps every runner off)
+wp db query --skip-column-names "SELECT COALESCE(MAX(action_id),0) FROM ${P}actionscheduler_actions" > "$PRIV/backups/max-action-$TS.txt"
 echo "== caches (WordPress boots with WP_ENV!=production and the safety harness on)"
 wp cache flush; wp rewrite flush; (wp kinsta cache purge --all 2>/dev/null || true)
 echo "$TS" > "$PRIV/last-import"

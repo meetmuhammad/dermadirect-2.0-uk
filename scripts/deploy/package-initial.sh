@@ -80,7 +80,7 @@ $R restore-staff.php identity --dest=$X --out="/var/www/html/$OUT/users-identity
 echo "== uploads delta (files renamed by renumbering)"
 sql -e "SELECT new_id FROM $X.dd_mig_idmap WHERE ns='posts'" | while read id; do f=web/app/uploads/generateblocks/style-$id.css; if [ -f "$f" ]; then mkdir -p "$OUT/uploads/generateblocks" && cp -p "$f" "$OUT/uploads/generateblocks/"; fi; done
 echo "== retained legacy plugins (private bundle)"
-tar -C web/app/plugins -czf "$OUT/plugins-retained.tar.gz" super-payments woocommerce-gateway-rules-manager product-batch-expiry-tracking-for-woocommerce woocommerce-back-in-stock-notifications wpgens-refer-a-friend-premium advanced-shipment-tracking-pro
+COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -C web/app/plugins -czf "$OUT/plugins-retained.tar.gz" super-payments woocommerce-gateway-rules-manager product-batch-expiry-tracking-for-woocommerce woocommerce-back-in-stock-notifications wpgens-refer-a-friend-premium advanced-shipment-tracking-pro
 cp scripts/deploy/remote/*.sh "$OUT/remote/"
 echo "== manifest"
 COUNTS=$(sql -e "SELECT CONCAT('{\"orders_by_status\":{', GROUP_CONCAT(CONCAT('\"',post_type,'/',post_status,'\":',n)), '}') FROM (SELECT post_type, post_status, COUNT(*) n FROM $X.wp_posts WHERE post_type IN ('shop_order','shop_order_refund') GROUP BY 1,2) z")

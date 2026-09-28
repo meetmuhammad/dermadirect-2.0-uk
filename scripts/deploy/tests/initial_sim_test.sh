@@ -32,6 +32,7 @@ for f in 'http://localhost:8088' 'http:\/\/localhost:8088'; do
 done
 t "seed: stored site address is the review URL, no local URL in settings" "[ \"\$(sql -e \"SELECT GROUP_CONCAT(option_value) FROM $DB.wp_options WHERE option_name IN ('home','siteurl')\")\" = '$URL,$URL' ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_options WHERE option_value REGEXP 'localhost:808'\")\" = 0 ]"
 t "seed: regression case present (hosted administrator at 17553, a legacy customer's ID in the package)" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_usermeta WHERE user_id=17553 AND meta_key='wp_capabilities' AND meta_value LIKE '%administrator%'\")\" = 1 ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM $X.wp_usermeta WHERE user_id=17553 AND meta_key='wp_capabilities' AND meta_value LIKE '%\\\"customer\\\"%'\")\" = 1 ]"
+t "code artifact and plugin bundle contain no macOS metadata entries (as Linux tar sees them)" "[ \"\$(docker run --rm -v $PWD/$ART:/a.tgz:ro -v $PWD/$PKG/plugins-retained.tar.gz:/p.tgz:ro --entrypoint sh wordpress:cli -c 'tar -tzf /a.tgz 2>&1; tar -tzf /p.tgz 2>&1' | grep -c '\\(^\\|/\\)\\._\\|Ignoring unknown extended header')\" = 0 ]"
 HOSTED_17553=$(sql -e "SELECT SHA2(CONCAT_WS('|',user_login,user_email,user_pass),256) FROM $DB.wp_users WHERE ID=17553")
 STAFF_HASH_BEFORE=$(sql -e "SELECT user_pass FROM $DB.wp_users WHERE ID=10224")
 
@@ -78,7 +79,8 @@ t "legacy order IDs present (latest 698961)" "[ \"\$(sql -e \"SELECT MAX(ID) FRO
 t "renumbering map carried over (1160 rows)" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.dd_mig_idmap WHERE ns<>'staff'\")\" = 1160 ]"
 t "renumbered CSS files placed in uploads" "[ -f $P/web/app/uploads/generateblocks/style-996282.css ]"
 t "retained plugins installed" "[ -f $P/web/app/plugins/super-payments/super-payments.php ]"
-t "webhooks paused, no pending scheduled actions" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_wc_webhooks WHERE status='active'\")\" = 0 ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_actionscheduler_actions WHERE status='pending'\")\" = 0 ]"
+MAXA=$(cat "$PRIV"/backups/max-action-*.txt)
+t "webhooks paused; every carried-over action cancelled; no webhook delivery queued" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_wc_webhooks WHERE status='active'\")\" = 0 ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_actionscheduler_actions WHERE status='pending' AND (action_id<=$MAXA OR hook='woocommerce_deliver_webhook_async')\")\" = 0 ]"
 t "pre-import backup valid (trailer, table count, checksum)" "B=\$(ls -1t $PRIV/backups/pre-initial-*.sql.gz | head -1) && gunzip -c \$B | tail -c 300 | grep -q -- '-- Dump completed' && [ \$(gunzip -c \$B | grep -c '^CREATE TABLE') -ge 200 ] && (cd $PRIV/backups && sed 's#$KP/backups/##' \$(basename \$B).sha256 | shasum -a 256 -c >/dev/null)"
 t "second apply refused while lock held" "mkdir $PRIV/lock && ! $DOCK 'bash $KPKG/remote/initial-import.sh $KR $URL $KPKG $KP X' >/dev/null 2>&1; rmdir $PRIV/lock 2>/dev/null; true"
 sql -e "INSERT INTO $DB.wp_posts (ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count) VALUES (1000001,0,NOW(),UTC_TIMESTAMP(),'','sim new-site order','','wc-processing','closed','closed','','','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'shop_order','',0)"
@@ -104,7 +106,9 @@ jq() { python3 -c "import json,sys;d=json.load(open('$J'));$1" 2>/dev/null; }
 t "sim: temporary QA admin removed and customer hash restored" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_users WHERE user_login='dd-sim-qa'\")\" = 0 ] && [ \"\$(sql -e \"SELECT user_pass FROM $DB.wp_users WHERE ID=$CUST\")\" = \"\$CHASH\" ]"
 t "browser: admin login; customer login" "jq \"sys.exit(0 if d.get('adminLogin') and d.get('customerLogin') else 1)\""
 t "browser: customer sees only their own orders; another customer's order is refused" "jq \"sys.exit(0 if d.get('customerOrdersAllOwn') and d.get('foreignOrderDenied') else 1)\""
-t "browser: every storefront, product, menu and admin page returns 2xx/3xx without a critical error" "jq \"s=d['summary'];sys.exit(0 if not s['non2xx'] and not s['criticalErrors'] else 1)\""
+# One recorded exception (PLAN §9.7, unchanged from earlier rehearsals): the homepage block editor returns 500
+# while Super Payments is active and its API is unreachable; pending Kiefer's Super Payments setup on Kinsta.
+t "browser: every storefront, product, menu and admin page returns 2xx/3xx without a critical error (except the recorded Super Payments editor 500)" "jq \"s=d['summary'];bad=[x for x in s['non2xx'] if x!='admin-home-edit-desktop:500']+[x for x in s['criticalErrors'] if x!='admin-home-edit-desktop'];print(bad);sys.exit(1 if bad else 0)\""
 t "browser: no broken images on storefront pages" "jq \"sys.exit(0 if d['summary']['brokenImages']==0 else 1)\""
 t "browser: every same-site link checked resolves" "jq \"sys.exit(0 if not d['summary']['badLinks'] else 1)\""
 t "browser: orders screen All (120,194) / 120,148 items" "grep -q 'All (120,194)' migration-reports/qa-sim-hosted.log && grep -q '120,148 items' migration-reports/qa-sim-hosted.log"
@@ -113,6 +117,7 @@ t "browser: no page requested a local address (localhost/:8088/:8089); external 
 echo "== cron suppression on the simulated server"
 T0=$(date -u '+%Y-%m-%d %H:%M:%S'); $DOCK "cd $KR && php web/wp/wp-cron.php >/dev/null 2>&1; true"
 t "sim: wp-cron.php executes no scheduled action" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_actionscheduler_actions WHERE last_attempt_gmt >= '$T0'\")\" = 0 ]"
+t "sim: no scheduled action executed at any point since the import" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $DB.wp_actionscheduler_actions WHERE action_id>$MAXA AND status IN ('complete','failed','in-progress')\")\" = 0 ]"
 
 echo "== independent reconciliation of the simulated hosted database against the legacy snapshot"
 ./scripts/migration/run.sh reconcile.php --src=dd_rh_src_pristine_20260926 --src-prefix=lgcy_ --dest=$DB > migration-reports/reconcile-sim-hosted.log 2>&1 || true

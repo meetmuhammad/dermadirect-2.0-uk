@@ -41,8 +41,33 @@ async function instrument(context) {
     const req = route.request();
     const u = new URL(req.url());
     if (MAP && u.hostname === BASEHOST) {
-      const resp = await route.fetch({ url: MAP + u.pathname + u.search, headers: await req.allHeaders(), maxRedirects: 0 }).catch(() => null);
-      return resp ? route.fulfill({ response: resp }) : route.abort('failed');
+      // Chromium does not route the follow-up request of a redirect, so same-site redirects are followed
+      // here (each hop mapped to MAP, cookies carried between hops) and only the final response is served.
+      const headers = await req.allHeaders();
+      const jar = new Map((headers.cookie || '').split(/;\s*/).filter(Boolean).map((c) => c.split(/=(.*)/s).slice(0, 2)));
+      const setCookies = [];
+      let target = u; let resp = null;
+      for (let hop = 0; hop < 10; hop++) {
+        const h = { ...headers, cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') };
+        resp = await route.fetch(hop === 0
+          ? { url: MAP + target.pathname + target.search, headers: h, maxRedirects: 0 }
+          : { url: MAP + target.pathname + target.search, method: 'GET', postData: undefined, headers: { ...h, 'content-type': undefined, 'content-length': undefined }, maxRedirects: 0 }).catch(() => null);
+        if (!resp) return route.abort('failed');
+        for (const { name, value } of resp.headersArray()) {
+          if (name.toLowerCase() !== 'set-cookie') continue;
+          setCookies.push(value);
+          const [nv] = value.split(';'); const [k, v] = nv.split(/=(.*)/s);
+          /expires=Thu, 01[- ]Jan[- ]1970|max-age=0\b/i.test(value) ? jar.delete(k.trim()) : jar.set(k.trim(), v ?? '');
+        }
+        const loc = resp.headers().location;
+        if (![301, 302, 303, 307, 308].includes(resp.status()) || !loc) break;
+        const next = new URL(loc, BASE);
+        if (next.hostname !== BASEHOST) break;
+        target = next;
+      }
+      const out = Object.fromEntries(Object.entries(resp.headers()).filter(([k]) => k !== 'set-cookie' && k !== 'content-length' && k !== 'content-encoding'));
+      if (setCookies.length) out['set-cookie'] = setCookies.join('\n');
+      return route.fulfill({ status: resp.status(), headers: out, body: await resp.body() });
     }
     if (['localhost', '127.0.0.1'].includes(u.hostname)) {
       // Simulated hosted site: a page that points at a local address is a defect (wrong site URL).
@@ -110,7 +135,9 @@ async function login(page, user, pass) {
   return !/wp-login\.php/.test(page.url()) || !(await page.$('#login_error'));
 }
 
-const browser = await chromium.launch();
+// Fail closed: with --map, every host except localhost resolves to nothing, so a request the route above
+// does not serve (e.g. an unrouted redirect) can never reach the real site or any other host.
+const browser = await chromium.launch(MAP ? { args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1'] } : {});
 try {
   // Public pages, desktop and mobile
   for (const [vp, size] of [['desktop', { width: 1440, height: 900 }], ['mobile', { width: 390, height: 844 }]]) {
@@ -188,7 +215,7 @@ try {
       const vo = await visit(cp, 'customer-view-order', new URL(report.customerOrderLinks[0]).pathname);
       report.invoiceLinks = vo.links.filter((l) => /invoice|print|pdf/i.test(l));
       if (report.invoiceLinks[0]) {
-        const r = await cctx.request.get(report.invoiceLinks[0]);
+        const r = await cctx.request.get(MAP ? report.invoiceLinks[0].replace(new URL(BASE).origin, MAP) : report.invoiceLinks[0], { maxRedirects: MAP ? 0 : 20, headers: MAP ? { cookie: (await cctx.cookies(BASE)).map((c) => `${c.name}=${c.value}`).join('; ') } : {} });
         report.invoiceDownload = { status: r.status(), type: r.headers()['content-type'], bytes: (await r.body()).length };
       }
     }
