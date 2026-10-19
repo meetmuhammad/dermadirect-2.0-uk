@@ -25,7 +25,17 @@ $check = function (string $name, bool $ok, $detail = null) use (&$res) {
     $res['checks'][$name] = ['ok' => $ok, 'detail' => $detail];
     out(($ok ? 'PASS ' : 'FAIL ') . $name . ($detail !== null ? '  ' . (is_string($detail) ? $detail : json_encode($detail)) : ''));
 };
-$commercialIn = implode(',', array_map(fn ($k) => e($db, $k), cfg()['product_commercial']));
+// Product fields are only exempt from the protected-content check when products are synced.
+$commercialIn = cfg()['product_sync'] ? implode(',', array_map(fn ($k) => e($db, $k), cfg()['product_commercial'])) : "''";
+// Customers in scope: the shared rule (lib.php is_customer_caps), so verified group roles are included
+// and mixed customer + staff accounts follow the staff policy.
+$custIds = [];
+foreach (rows($db, "SELECT user_id, meta_value FROM {$SRC['usermeta']} WHERE meta_key='wp_capabilities'") as $r) {
+    if (is_customer_caps($r['meta_value'])) {
+        $custIds[] = (int) $r['user_id'];
+    }
+}
+$custIn = implode(',', $custIds ?: [0]);
 $legacyOrders = "SELECT ID FROM {$SRC['posts']} WHERE post_type IN ('shop_order','shop_order_refund')";
 
 // 1. Orders/refunds: counts and money by type, status, currency (legacy records only; destination-only kept separately)
@@ -70,7 +80,21 @@ $check('refunds: every refund parent is an order on the destination', (int) one(
 $dangling = fn ($S) => (int) one($db, "SELECT COUNT(*) FROM {$S['woocommerce_order_itemmeta']} im JOIN {$S['woocommerce_order_items']} oi ON oi.order_item_id=im.order_item_id
     LEFT JOIN {$S['posts']} p ON p.ID=im.meta_value WHERE oi.order_id IN ($legacyOrders) AND im.meta_key IN ('_product_id','_variation_id') AND im.meta_value>0 AND (p.ID IS NULL OR p.post_type NOT IN ('product','product_variation'))");
 $wrongType = (int) one($db, "SELECT COUNT(*) FROM `$dest`.wp_woocommerce_order_itemmeta im JOIN `$dest`.wp_posts p ON p.ID=im.meta_value WHERE im.meta_key IN ('_product_id','_variation_id') AND im.meta_value>0 AND p.post_type NOT IN ('product','product_variation')");
-$check('line-item product links: no link to a non-product; dangling <= legacy', $wrongType === 0 && $dangling($DST) <= $dangling($SRC), ['legacy_dangling' => $dangling($SRC), 'destination_dangling' => $dangling($DST), 'links_to_non_product' => $wrongType]);
+if (cfg()['product_sync']) {
+    $check('line-item product links: no link to a non-product; dangling <= legacy', $wrongType === 0 && $dangling($DST) <= $dangling($SRC), ['legacy_dangling' => $dangling($SRC), 'destination_dangling' => $dangling($DST), 'links_to_non_product' => $wrongType]);
+} else {
+    // Products are not migrated: the destination's unresolved links must equal legacy's own, plus links to
+    // legacy products the destination lacks, minus links to products legacy deleted that the destination
+    // still holds — exact accounting (each class listed by product-refs.php), nothing else may differ.
+    $itemRefs = "SELECT im.meta_value pid FROM {$SRC['woocommerce_order_itemmeta']} im JOIN {$SRC['woocommerce_order_items']} oi ON oi.order_item_id=im.order_item_id WHERE oi.order_id IN ($legacyOrders) AND im.meta_key IN ('_product_id','_variation_id') AND im.meta_value>0";
+    $isProd = fn ($S) => "SELECT ID FROM {$S['posts']} WHERE post_type IN ('product','product_variation')";
+    $legacyOnly = (int) one($db, "SELECT COUNT(*) FROM ($itemRefs) r WHERE r.pid IN ({$isProd($SRC)}) AND r.pid NOT IN ({$isProd($DST)})");
+    $destOnly = (int) one($db, "SELECT COUNT(*) FROM ($itemRefs) r WHERE r.pid NOT IN ({$isProd($SRC)}) AND r.pid IN ({$isProd($DST)})");
+    $expected = $dangling($SRC) + $legacyOnly - $destOnly;
+    $check('line-item product links: no link to a non-product; unresolved links exactly = legacy + legacy-only products - destination-only products',
+        $wrongType === 0 && $dangling($DST) === $expected, ['legacy_unresolved' => $dangling($SRC), 'links_to_products_missing_on_destination' => $legacyOnly,
+        'links_resolved_by_products_legacy_deleted' => $destOnly, 'expected' => $expected, 'destination_unresolved' => $dangling($DST), 'links_to_non_product' => $wrongType]);
+}
 
 // 7. Payment references
 $refKeys = ['_transaction_id', 'super_transaction_id', '_stripe_intent_id', '_payment_intent_id', '_stripe_customer_id', '_wc_shipment_tracking_items', 'marketing_opt_in_consent', 'wc_af_score'];
@@ -79,8 +103,7 @@ $check('payment/shipping/consent/anti-fraud references identical', $pr($SRC) == 
 
 // 8. Customers: password hashes, roles, addresses for all non-staff legacy users
 $cust = fn ($S) => one($db, "SELECT MD5(GROUP_CONCAT(CONCAT(u.ID,':',u.user_login,':',u.user_pass,':',COALESCE(c.meta_value,''),':',COALESCE(b.meta_value,''),':',COALESCE(p.meta_value,'')) ORDER BY u.ID)) FROM {$S['users']} u
-    JOIN {$SRC['usermeta']} sc ON sc.user_id=u.ID AND sc.meta_key='wp_capabilities' AND (sc.meta_value LIKE '%\"customer\"%' OR sc.meta_value LIKE '%\"blocked_customer\"%') AND sc.meta_value NOT LIKE '%administrator%'
-    LEFT JOIN {$S['usermeta']} c ON c.user_id=u.ID AND c.meta_key='wp_capabilities' LEFT JOIN {$S['usermeta']} b ON b.user_id=u.ID AND b.meta_key='billing_postcode' LEFT JOIN {$S['usermeta']} p ON p.user_id=u.ID AND p.meta_key='shipping_postcode'");
+    LEFT JOIN {$S['usermeta']} c ON c.user_id=u.ID AND c.meta_key='wp_capabilities' LEFT JOIN {$S['usermeta']} b ON b.user_id=u.ID AND b.meta_key='billing_postcode' LEFT JOIN {$S['usermeta']} p ON p.user_id=u.ID AND p.meta_key='shipping_postcode' WHERE u.ID IN ($custIn)");
 $check('customers: IDs, logins, password hashes, roles, address fields identical', $cust($SRC) === $cust($DST));
 $blocked = fn ($S) => (int) one($db, "SELECT COUNT(*) FROM {$S['usermeta']} WHERE meta_key='wp_capabilities' AND meta_value LIKE '%blocked_customer%'");
 $check('blocked_customer restrictions preserved (not unblocked)', $blocked($DST) >= $blocked($SRC), ['legacy' => $blocked($SRC), 'destination' => $blocked($DST)]);
@@ -102,12 +125,14 @@ $check('retained plugin tables: legacy rows all present (dest-only rows allowed)
 $an = fn ($S) => rows($db, "SELECT COUNT(*) n, ROUND(SUM(net_total),2) net, ROUND(SUM(total_sales),2) sales, SUM(num_items_sold) items FROM {$S['wc_order_stats']} WHERE order_id IN ($legacyOrders)")[0];
 $check('analytics order stats equal to legacy', $an($SRC) == $an($DST), $an($DST));
 
-// 11. Product commercial fields match legacy for identity-verified products
+// 11. Product commercial fields (only when products are in scope)
+if (cfg()['product_sync']) {
 $pc = one($db, "SELECT COUNT(*) FROM {$SRC['postmeta']} s JOIN {$SRC['posts']} sp ON sp.ID=s.post_id AND sp.post_type IN ('product','product_variation') JOIN `$dest`.wp_posts dp ON dp.ID=sp.ID AND dp.post_type=sp.post_type
     LEFT JOIN `$dest`.wp_postmeta d ON d.post_id=s.post_id AND d.meta_key=s.meta_key AND d.meta_value<=>s.meta_value
     WHERE s.meta_key IN ($commercialIn) AND d.meta_id IS NULL
     AND (SELECT meta_value FROM {$SRC['postmeta']} WHERE post_id=sp.ID AND meta_key='_sku' LIMIT 1) <=> (SELECT meta_value FROM `$dest`.wp_postmeta WHERE post_id=dp.ID AND meta_key='_sku' LIMIT 1)");
 $check('product commercial fields equal to legacy (identity-verified products)', (int) $pc === 0, "$pc mismatching values");
+}
 
 // 12. Protected destination content unchanged by the sync (compared with the pre-sync copy)
 if ($before) {

@@ -36,7 +36,9 @@ TABLES=$(echo "posts postmeta users usermeta comments commentmeta woocommerce_or
  wc_order_stats wc_order_product_lookup wc_order_tax_lookup wc_order_coupon_lookup wc_customer_lookup woocommerce_payment_tokens woocommerce_payment_tokenmeta
  webis_pbet webis_pbet_order webis_pbet_order_item woocommerce_bis_notifications woocommerce_bis_notificationsmeta woocommerce_bis_activity
  gens_raf gens_rafmeta gens_raf_guest_referrals wt_sc_coupon_lookup wdr_order_item_discounts pp_order_actions_log trackship_shipment
- trackship_shipment_meta zorem_email_sms_log stock_log woocommerce_downloadable_product_permissions" | tr -s ' \n\t' '   ')
+ trackship_shipment_meta zorem_email_sms_log stock_log woocommerce_downloadable_product_permissions wdr_order_discounts options" | tr -s ' \n\t' '   ')
+# wp_options is reduced to config.php 'source_options' (role definitions, versions, home): no credentials.
+SRCOPTS=$(docker compose --profile cli run --rm -T --no-deps --entrypoint php wpcli -r 'echo "\x27" . implode("\x27,\x27", (require "scripts/migration/config.php")["source_options"]) . "\x27";' 2>/dev/null)
 if [ -n "$HOSTED" ]; then
   . ./.deploy-targets
   SSH="ssh -p $KINSTA_REVIEW_PORT -o BatchMode=yes $KINSTA_REVIEW_SSH"; R=$KINSTA_REVIEW_ROOT; PRIV=$KINSTA_REVIEW_PRIVATE; RD=$PRIV/final-sync/$LABEL
@@ -61,14 +63,29 @@ snapshot)
     shasum -a 256 -c "$FROMDUMP.sha256" >/dev/null; SHA=$(cut -d' ' -f1 "$FROMDUMP.sha256"); ORIGIN="dump:$(basename "$FROMDUMP")"
     gunzip -c "$FROMDUMP" | docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" "$1"' sh "$SRCDB"
   elif [ -n "$FROMLEGACY" ]; then
+    # Read-only on production: wp db query/export only (WP-CLI loads wp-config, never WordPress or
+    # plugins), compressed on the server, streamed over SSH; no file is written on the server.
+    # One mysqldump --single-transaction over InnoDB tables = one consistent point, no table locks.
     . ./.deploy-targets   # LEGACY_SSH / LEGACY_PORT / LEGACY_ROOT (read-only use)
     LS="ssh -p ${LEGACY_PORT:?} -o BatchMode=yes ${LEGACY_SSH:?}"
-    WT=""; for t in $TABLES; do WT="$WT,wp_$t"; done
-    HOME_URL=$($LS "cd '${LEGACY_ROOT:?}' && wp option get home --skip-plugins --skip-themes"); THEME=$($LS "cd '$LEGACY_ROOT' && wp option get stylesheet --skip-plugins --skip-themes")
-    $LS "cd '$LEGACY_ROOT' && wp db export - --tables=${WT#,} --single-transaction --quick --skip-triggers" | gzip -1 > "$DIR/legacy-raw.sql.gz"
-    SHA=$(shasum -a 256 "$DIR/legacy-raw.sql.gz" | cut -d' ' -f1); ORIGIN="legacy-kinsta:$LEGACY_SSH"
+    lq() { $LS "cd '${LEGACY_ROOT:?}' && wp db query --skip-column-names \"$1\" 2>/dev/null"; }
+    WT=""; for t in $TABLES; do [ "$t" = options ] || WT="$WT,wp_$t"; done
+    HOME_URL=$(lq "SELECT option_value FROM wp_options WHERE option_name='home'"); THEME=$(lq "SELECT option_value FROM wp_options WHERE option_name='stylesheet'")
+    IDENT="$($LS hostname) $(lq "SELECT CONCAT(DATABASE(),' / ',@@hostname,' / ',@@version)")"
+    NONINNODB=$(lq "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name IN ('$(echo "${WT#,}" | sed "s/,/','/g")') AND engine<>'InnoDB'")
+    [ "$NONINNODB" = 0 ] || { echo "non-InnoDB source tables ($NONINNODB): a single-transaction export would not be consistent — refusing"; exit 1; }
+    T0=$(date -u +%FT%TZ)
+    $LS "cd '$LEGACY_ROOT' && set -o pipefail && wp db export - --tables=${WT#,} --single-transaction --quick --skip-triggers --hex-blob --default-character-set=utf8mb4 | gzip -1" > "$DIR/legacy-raw.sql.gz"
+    T1=$(date -u +%FT%TZ)
+    $LS "cd '$LEGACY_ROOT' && set -o pipefail && wp db export - --tables=wp_options --where=\"option_name IN ($SRCOPTS)\" --single-transaction --skip-triggers --hex-blob --default-character-set=utf8mb4 | gzip -1" > "$DIR/legacy-options.sql.gz"
+    chmod 600 "$DIR"/legacy-*.sql.gz
+    for f in legacy-raw legacy-options; do gunzip -t "$DIR/$f.sql.gz" && gunzip -c "$DIR/$f.sql.gz" | tail -c 300 | grep -q -- '-- Dump completed' || { echo "$f dump incomplete — refusing"; exit 1; }; done
+    [ "$(gunzip -c "$DIR/legacy-raw.sql.gz" | grep -c '^CREATE TABLE')" -ge "$(echo "${WT#,}" | tr ',' '\n' | grep -c .)" ] || { echo "raw dump is missing tables — refusing"; exit 1; }
+    shasum -a 256 "$DIR/legacy-raw.sql.gz" > "$DIR/legacy-raw.sql.gz.sha256"; shasum -a 256 "$DIR/legacy-options.sql.gz" > "$DIR/legacy-options.sql.gz.sha256"
+    SHA=$(cut -d' ' -f1 "$DIR/legacy-raw.sql.gz.sha256"); OSHA=$(cut -d' ' -f1 "$DIR/legacy-options.sql.gz.sha256"); ORIGIN="legacy-kinsta:$LEGACY_SSH"
+    METHOD="mysqldump via wp db export --single-transaction --quick (InnoDB, no locks); options rows exported separately ($OSHA)"
     gunzip -c "$DIR/legacy-raw.sql.gz" | docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" "$1"' sh "$SRCDB"
-    rm -f "$DIR/legacy-raw.sql.gz"
+    gunzip -c "$DIR/legacy-options.sql.gz" | docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" "$1"' sh "$SRCDB"
   else
     LP=$(sed -n "s/.*'DB_PASSWORD', *'\([^']*\)'.*/\1/p" /Users/Ammar/development/DevKinsta/public/httpsdermadirectcom/wp-config.php)
     LDB=$(sed -n "s/.*'DB_NAME', *'\([^']*\)'.*/\1/p" /Users/Ammar/development/DevKinsta/public/httpsdermadirectcom/wp-config.php)
@@ -80,6 +97,8 @@ snapshot)
     gunzip -c "$DIR/legacy-raw.sql.gz" | docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" "$1"' sh "$SRCDB"
     rm -f "$DIR/legacy-raw.sql.gz"
   fi
+  # Whatever the origin, only the allowlisted option rows stay in the source (no credentials).
+  [ -n "$(sql -e "SELECT 1 FROM information_schema.tables WHERE table_schema='$SRCDB' AND table_name='wp_options'")" ] && sql -e "DELETE FROM \`$SRCDB\`.wp_options WHERE option_name NOT IN ($SRCOPTS)"
   [ -n "${HOME_URL:-}" ] || HOME_URL=$(sql -e "SELECT option_value FROM \`$SRCDB\`.wp_options WHERE option_name='home'" 2>/dev/null || true)
   [ -n "${THEME:-}" ] || THEME=$(sql -e "SELECT option_value FROM \`$SRCDB\`.wp_options WHERE option_name='stylesheet'" 2>/dev/null || true)
   [ -n "$HOME_URL" ] || { echo "cannot determine the legacy home URL of the source — refusing"; exit 1; }
@@ -91,6 +110,8 @@ snapshot)
   sql -e "CREATE TABLE \`$SRCDB\`.${PFX}dd_snapshot (k VARCHAR(64) PRIMARY KEY, v TEXT) ENGINE=InnoDB;
     INSERT INTO \`$SRCDB\`.${PFX}dd_snapshot VALUES ('label','$LABEL'),('origin','$ORIGIN'),('exported_at_utc','$TS'),('raw_sha256','$SHA'),
     ('legacy_home','$HOME_URL'),('legacy_stylesheet','${THEME:-unknown}'),
+    ('export_started_utc','${T0:-}'),('export_finished_utc','${T1:-}'),('source_db_identity','${IDENT:-}'),('snapshot_method','${METHOD:-local copy}'),
+    ('max_user_id',(SELECT MAX(ID) FROM \`$SRCDB\`.${PFX}users)),('max_post_id',(SELECT MAX(ID) FROM \`$SRCDB\`.${PFX}posts)),
     ('max_order_id',(SELECT MAX(ID) FROM \`$SRCDB\`.${PFX}posts WHERE post_type IN ('shop_order','shop_order_refund'))),
     ('latest_order',(SELECT MAX(post_date) FROM \`$SRCDB\`.${PFX}posts WHERE post_type='shop_order'));"
   sql -e "GRANT SELECT ON \`$SRCDB\`.* TO dd_migrate@'%'" 2>/dev/null || true

@@ -28,7 +28,6 @@ namespace DDMig;
 
 require_once __DIR__ . '/lib.php';
 
-const CUSTOMER_ROLES = ['customer', 'blocked_customer'];
 
 $a = args($argv);
 $mode = $a['_'][0] ?? fail('mode required: identity|save|plan|apply|verify');
@@ -37,14 +36,13 @@ $capKey = $P . 'capabilities';
 $offset = (int) cfg()['relocate_offset']['users'];
 $ceiling = (int) cfg()['future_start']['wp_users'];
 
-/** 'customer' | 'staff' | 'none' from a serialized capabilities value. */
+/** 'customer' | 'staff' | 'none' from a serialized capabilities value (shared rule: lib.php). */
 function cls(?string $caps): string
 {
-    $c = $caps === null ? false : @unserialize($caps, ['allowed_classes' => false]);
-    if (!is_array($c) || !array_filter($c)) {
+    if (!caps_roles($caps)) {
         return 'none';
     }
-    return array_intersect(array_keys(array_filter($c)), CUSTOMER_ROLES) ? 'customer' : 'staff';
+    return is_customer_caps($caps) ? 'customer' : 'staff';
 }
 
 /** id => [lh, eh, ph, class, capsdigest] computed in SQL so both sides hash identically. */

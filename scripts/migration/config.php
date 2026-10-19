@@ -37,7 +37,27 @@ return [
         'wp_gens_raf' => 60000,
         'wp_wc_customer_lookup' => 100000,
     ],
-    // Legacy-owned product fields (decision 05 + launch scope): prices, sale schedule, stock, tax,
+    // Customer accounts: a user is a customer when every role it holds is a base customer role or a
+    // verified customer-group role, and it holds at least one base customer role. Anything else
+    // (unknown roles, staff roles, mixed customer + staff) follows the staff policy (not synced).
+    'customer_roles' => ['customer', 'blocked_customer'],
+    // nexfill_switch: verified on legacy production 2026-10-19 (read-only): definition
+    // {"name":"Nexfill Switch","capabilities":{"read":true}}; 200 members, all also 'customer'.
+    // Group roles whose definition is missing on the destination are added verbatim from the source
+    // snapshot; an existing destination definition that differs is reported, never overwritten.
+    'customer_group_roles' => ['nexfill_switch'],
+
+    // Scope correction 2026-10-19 (Ammar): destination products and variations are never written —
+    // no price/stock/SKU/status sync, no placeholders, no product-owned plugin tables. Product
+    // differences and order/coupon references to products are reported only (product-refs.php).
+    'product_sync' => false,
+    // Legacy option rows copied into the source snapshot (lgcy_options). Nothing else from wp_options
+    // leaves production: no credentials, keys or integration settings.
+    'source_options' => ['home', 'siteurl', 'stylesheet', 'template', 'wp_user_roles', 'db_version', 'woocommerce_version',
+        'woocommerce_db_version', 'woocommerce_custom_orders_table_enabled', 'woocommerce_custom_orders_table_data_sync_enabled',
+        'timezone_string', 'gmt_offset', 'woocommerce_currency', 'woocommerce_prices_include_tax', 'woocommerce_calc_taxes'],
+
+    // Legacy-owned product fields (decision 05 + launch scope; NOT used while product_sync is false): prices, sale schedule, stock, tax,
     // total sales, and warehouse barcode data. The rendered barcode image and the legacy server file
     // path are excluded (derived / environment-specific). Everything else on a product is protected.
     'product_commercial' => ['_regular_price', '_sale_price', '_sale_price_dates_from', '_sale_price_dates_to', '_price', '_stock',
@@ -71,6 +91,9 @@ return [
             // are already correct, so only the uploads path changes.
             'kinsta-final' => [],
             // 'auto': legacy base URL recorded in the source snapshot -> the destination's current home.
+            // 'verbatim': no rewrite and no normalization at all — legacy values are copied and compared
+            // byte for byte (used with an authentic production snapshot; see sync.php).
+            'verbatim' => [],
         ],
     ],
     // Preflight: legacy max must stay below the next reserved band by max(25% of legacy max, 500).

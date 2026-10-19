@@ -251,6 +251,26 @@ function finish_run(\mysqli $db, string $dest, string $run, string $status, arra
     q($db, "UPDATE `$dest`.dd_mig_runs SET finished_at=UTC_TIMESTAMP(), status=" . e($db, $status) . ', summary=' . e($db, json_encode($summary)) . ' WHERE run_id=' . e($db, $run));
 }
 
+/** Role keys a serialized capabilities value grants (truthy entries only). */
+function caps_roles(?string $caps): array
+{
+    $c = $caps === null ? false : @unserialize($caps, ['allowed_classes' => false]);
+    return is_array($c) ? array_map('strval', array_keys(array_filter($c))) : [];
+}
+
+/**
+ * The single customer rule used by every tool: every role is a base customer role or a verified
+ * customer-group role (config), and at least one base customer role is present. Unknown roles,
+ * staff roles and mixed customer + staff accounts are NOT customers (staff policy applies).
+ */
+function is_customer_caps(?string $caps): bool
+{
+    $roles = caps_roles($caps);
+    $base = cfg()['customer_roles'];
+    $allowed = array_merge($base, cfg()['customer_group_roles']);
+    return $roles !== [] && !array_diff($roles, $allowed) && (bool) array_intersect($roles, $base);
+}
+
 function report_dir(): string
 {
     $d = getenv('MIG_REPORT_DIR') ?: __DIR__ . '/../../migration-reports';

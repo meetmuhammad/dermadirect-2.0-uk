@@ -19,7 +19,6 @@ require_once __DIR__ . '/refs.php';
 require_once __DIR__ . '/scan.php';
 
 const ORDER_TYPES = ['shop_order', 'shop_order_refund'];
-const CUSTOMER_ROLES = ['customer', 'blocked_customer'];
 const USERMETA_DENY = ['session_tokens', 'wp_2fa_%', '_woocommerce_persistent_cart_%', 'community-events-location'];
 /** Legacy-owned plugin/operational tables synced row by row on their primary key. */
 const KEYED_TABLES = [
@@ -30,7 +29,16 @@ const KEYED_TABLES = [
     'wp_wt_sc_coupon_lookup' => 'id', 'wp_wdr_order_item_discounts' => 'id', 'wp_pp_order_actions_log' => 'id',
     'wp_trackship_shipment' => 'id', 'wp_trackship_shipment_meta' => 'meta_id', 'wp_zorem_email_sms_log' => 'id',
     'wp_stock_log' => 'ID', 'wp_woocommerce_downloadable_product_permissions' => 'permission_id',
+    'wp_wdr_order_discounts' => 'id',
 ];
+/** Product-owned inventory tables (batch stock, stock history): never written while product_sync is false. */
+const PRODUCT_OWNED_TABLES = ['wp_webis_pbet', 'wp_stock_log'];
+
+/** Keyed tables in scope for this run. */
+function keyed_tables(): array
+{
+    return cfg()['product_sync'] ? KEYED_TABLES : array_diff_key(KEYED_TABLES, array_flip(PRODUCT_OWNED_TABLES));
+}
 const HPOS_TABLES = ['wp_wc_orders' => 'id', 'wp_wc_order_addresses' => 'order_id', 'wp_wc_order_operational_data' => 'order_id', 'wp_wc_orders_meta' => 'order_id'];
 const LOOKUP_TABLES = ['wp_wc_order_stats' => 'order_id', 'wp_wc_order_product_lookup' => 'order_id', 'wp_wc_order_tax_lookup' => 'order_id', 'wp_wc_order_coupon_lookup' => 'order_id'];
 
@@ -158,11 +166,7 @@ final class Sync
 
     public static function isCustomerCaps(?string $caps): bool
     {
-        $c = @unserialize((string) $caps, ['allowed_classes' => false]);
-        if (!is_array($c) || !$c) {
-            return false;
-        }
-        return !array_diff(array_keys(array_filter($c)), CUSTOMER_ROLES);
+        return is_customer_caps($caps);
     }
 
     /** Classifies all records of an entity. Returns ['new'=>[], 'changed'=>[], 'same'=>n, 'dest_only'=>[], 'conflict'=>[]]. */
@@ -517,10 +521,46 @@ final class Sync
     }
 }
 
+/**
+ * Definitions of verified customer-group roles (config customer_group_roles): copied verbatim from the
+ * source snapshot's wp_user_roles when the destination lacks the role; a differing destination
+ * definition is reported as a conflict and left alone. No other role is ever touched.
+ */
+function group_roles(\mysqli $db, TableRef $ST, string $dest, bool $apply): array
+{
+    $groups = cfg()['customer_group_roles'];
+    if (!$groups) {
+        return [];
+    }
+    $key = cfg()['prefix'] . 'user_roles';
+    $src = @unserialize((string) one($db, "SELECT option_value FROM {$ST['options']} WHERE option_name=" . e($db, $key)), ['allowed_classes' => false]);
+    $dstRaw = (string) one($db, "SELECT option_value FROM `$dest`.wp_options WHERE option_name=" . e($db, $key));
+    $dst = @unserialize($dstRaw, ['allowed_classes' => false]);
+    is_array($src) && is_array($dst) || fail('cannot read role definitions (source lgcy_options / destination wp_options)');
+    $out = [];
+    foreach ($groups as $g) {
+        if (!isset($src[$g])) {
+            $out[$g] = 'absent in source (no member can hold it)';
+        } elseif (!isset($dst[$g])) {
+            $out[$g] = $apply ? 'added from source' : 'would be added from source';
+            $dst[$g] = $src[$g];
+        } else {
+            $out[$g] = $dst[$g] == $src[$g] ? 'present, identical' : 'CONFLICT: destination definition differs (left unchanged)';
+        }
+    }
+    if ($apply && in_array('added from source', $out, true)) {
+        q($db, "UPDATE `$dest`.wp_options SET option_value=" . e($db, serialize($dst)) . " WHERE option_name=" . e($db, $key));
+    }
+    return $out;
+}
+
 function plan_and_apply(\mysqli $db, TableRef $ST, string $dest, string $run, bool $apply, array $only, int $batch, string $profile): array
 {
+    $sum = [];
     $rw = cfg()['url_rewrite'];
-    if ($profile === 'auto') {
+    if ($profile === 'verbatim') {
+        $pairs = []; // byte-for-byte copy and comparison: no rewrite, no normalization, not even 'common'
+    } elseif ($profile === 'auto') {
         $legacyHome = (string) one($db, "SELECT v FROM {$ST['dd_snapshot']} WHERE k='legacy_home'");
         $destHome = (string) one($db, "SELECT option_value FROM `$dest`.wp_options WHERE option_name='home'");
         if ($legacyHome === '' || $destHome === '') {
@@ -530,15 +570,16 @@ function plan_and_apply(\mysqli $db, TableRef $ST, string $dest, string $run, bo
     } else {
         $pairs = array_merge($rw['profiles'][$profile] ?? fail("unknown url profile $profile"), $rw['common']);
     }
+    $sum['url_profile'] = ['profile' => $profile, 'pairs' => $pairs];
     $s = new Sync($db, $ST, $dest, $run, $batch, $pairs);
     $want = fn ($x) => !$only || in_array($x, $only, true);
-    $sum = [];
     $timing = [];
     $t = microtime(true);
     $lap = function (string $k) use (&$t, &$timing) { $timing[$k] = round(microtime(true) - $t, 1); $t = microtime(true); };
     $rep = report_dir();
 
     if ($want('users')) {
+        $sum['roles'] = group_roles($db, $ST, $dest, $apply);
         $u = $s->classifyUsers();
         $lap('users_classify');
         $sum['users'] = ['new' => count($u['new']), 'changed' => count($u['changed']), 'same' => $u['same'], 'conflict' => count($u['conflict']), 'staff_skipped' => count($u['staff']), 'dest_only' => count($u['dest_only'])];
@@ -588,7 +629,7 @@ function plan_and_apply(\mysqli $db, TableRef $ST, string $dest, string $run, bo
         $lap('analytics');
     }
     if ($want('plugins')) {
-        foreach (KEYED_TABLES as $table => $pk) {
+        foreach (keyed_tables() as $table => $pk) {
             $k = $s->classifyKeyed($table, $pk);
             $sum['plugins'][$table] = isset($k['missing_table']) ? 'table missing on destination' : ['new' => count($k['new']), 'changed' => count($k['changed']), 'same' => $k['same'], 'dest_only' => count($k['dest_only'])];
             if ($apply && !isset($k['missing_table'])) {
@@ -597,7 +638,9 @@ function plan_and_apply(\mysqli $db, TableRef $ST, string $dest, string $run, bo
         }
         $lap('plugins');
     }
-    if ($want('products')) {
+    if (!cfg()['product_sync']) {
+        $sum['products'] = 'not synced (scope 2026-10-19): destination products untouched; see product-refs.php for references';
+    } elseif ($want('products')) {
         [$changes, $ex] = $s->products($apply);
         $sum['products'] = ['field_changes' => count($changes), 'products_changed' => count(array_unique(array_column($changes, 'id'))), 'ambiguous' => count($ex['ambiguous']), 'status_differs' => count($ex['status_differs'])];
         $byKey = [];
@@ -648,7 +691,10 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     // Every table the sync reads must exist in the source (fail before writing anything).
     $need = ['posts', 'postmeta', 'users', 'usermeta', 'comments', 'commentmeta', 'woocommerce_order_items', 'woocommerce_order_itemmeta', 'terms',
         'term_taxonomy', 'term_relationships', 'wc_order_stats', 'wc_order_product_lookup', 'wc_order_tax_lookup', 'wc_order_coupon_lookup', 'wc_customer_lookup'];
-    foreach (array_keys(KEYED_TABLES) as $kt) {
+    if (cfg()['customer_group_roles']) {
+        $need[] = 'options';
+    }
+    foreach (array_keys(keyed_tables()) as $kt) {
         if ((int) one($db, 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=' . e($db, $dest) . ' AND table_name=' . e($db, $kt))) {
             $need[] = $kt;
         }

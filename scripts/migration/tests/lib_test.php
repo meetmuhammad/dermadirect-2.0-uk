@@ -16,5 +16,22 @@ check('distinct prefixes, same schema: no overlap', !tables_overlap($S, $D));
 check('same prefix, same schema: overlap', tables_overlap(new TableRef('x', 'wp_'), new TableRef('x', 'wp_')));
 check('nested prefix wp_ vs wp_old_: overlap', tables_overlap(new TableRef('x', 'wp_old_'), new TableRef('x', 'wp_')));
 check('different schemas never overlap', !tables_overlap(new TableRef('a', 'wp_'), new TableRef('b', 'wp_')));
+// Customer rule (shared by sync, staff restore, reconcile and verify): verified group roles count as
+// customers; staff, mixed customer+staff, unknown roles and group-only accounts do not.
+$caps = fn (array $roles) => serialize(array_fill_keys($roles, true));
+$isC = fn (array $roles) => \DDMig\is_customer_caps($caps($roles));
+check('ordinary customer is a customer', $isC(['customer']));
+check('Nexfill Switch customer (customer + nexfill_switch) is a customer', $isC(['customer', 'nexfill_switch']));
+check('blocked customer is a customer (no new enforcement, role kept)', $isC(['blocked_customer']));
+check('blocked customer in the group is a customer', $isC(['blocked_customer', 'nexfill_switch']));
+check('staff (shop_manager) is not a customer', !$isC(['shop_manager']));
+check('administrator is not a customer', !$isC(['administrator']));
+check('mixed customer + shop_manager follows the staff policy', !$isC(['customer', 'shop_manager']));
+check('mixed customer + administrator follows the staff policy', !$isC(['customer', 'administrator']));
+check('customer + an unknown role follows the staff policy (unknown roles are not assumed safe)', !$isC(['customer', 'some_new_role']));
+check('group role alone (no base customer role) follows the staff policy', !$isC(['nexfill_switch']));
+check('"customer-service" staff role is not mistaken for customer', !$isC(['customer-service']));
+check('empty capabilities are not a customer', !\DDMig\is_customer_caps(serialize([])) && !\DDMig\is_customer_caps(null));
+check('a role granted false does not count', $isC(['customer']) && \DDMig\is_customer_caps(serialize(['customer' => true, 'administrator' => false])));
 echo $fails ? "\n$fails FAILED\n" : "\nALL PASSED\n";
 exit($fails ? 1 : 0);
