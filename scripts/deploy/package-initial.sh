@@ -65,8 +65,10 @@ echo "== residual checks"
 # REPORTED (allowed, listed in residuals-reported.tsv): pre-existing values in destination-owned
 # settings/content and in tables of legacy-only plugins the new site does not run (already on Kinsta).
 txtcols() { sql -e "SELECT GROUP_CONCAT(CONCAT('\`',column_name,'\` LIKE ''%$2%''') SEPARATOR ' OR ') FROM information_schema.columns WHERE table_schema='$X' AND table_name='$1' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext')"; }
-COMMERCE="SELECT ID FROM $X.wp_posts WHERE post_type IN ('shop_order','shop_order_refund','shop_coupon')"
-CUSTOMERS="SELECT user_id FROM $X.wp_usermeta WHERE meta_key='wp_capabilities' AND (meta_value LIKE '%\"customer\"%' OR meta_value LIKE '%\"blocked_customer\"%')"
+# legacy-owned = records that exist in the legacy snapshot (destination-only records kept by the sync are
+# destination-owned: their values are listed under REPORTED, never rewritten here)
+COMMERCE="SELECT ID FROM $X.wp_posts WHERE post_type IN ('shop_order','shop_order_refund','shop_coupon') AND ID IN (SELECT ID FROM \`$LEG\`.lgcy_posts)"
+CUSTOMERS="SELECT user_id FROM $X.wp_usermeta WHERE meta_key='wp_capabilities' AND (meta_value LIKE '%\"customer\"%' OR meta_value LIKE '%\"blocked_customer\"%') AND user_id IN (SELECT ID FROM \`$LEG\`.lgcy_users)"
 KEYED="wp_wc_orders wp_wc_order_addresses wp_wc_orders_meta wp_wc_order_operational_data wp_woocommerce_order_items wp_woocommerce_order_itemmeta wp_woocommerce_payment_tokens wp_woocommerce_payment_tokenmeta wp_webis_pbet wp_webis_pbet_order wp_webis_pbet_order_item wp_woocommerce_bis_notifications wp_woocommerce_bis_notificationsmeta wp_woocommerce_bis_activity wp_gens_raf wp_gens_rafmeta wp_gens_raf_guest_referrals wp_wt_sc_coupon_lookup wp_wdr_order_item_discounts wp_pp_order_actions_log wp_trackship_shipment wp_trackship_shipment_meta wp_zorem_email_sms_log wp_stock_log wp_wc_order_stats wp_wc_order_product_lookup wp_wc_order_tax_lookup wp_wc_order_coupon_lookup wp_wc_customer_lookup"
 : > "$OUT/residuals-reported.tsv"
 for needle in "localhost:808" "127.0.0.1:808" "httpsdermadirectcom.local" "/var/www/html" "DD-MIGRATION-TEST" "@example.invalid"; do

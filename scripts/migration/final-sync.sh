@@ -168,7 +168,7 @@ upload)
   $SSH "cd '$RD' && sha256sum -c source-lgcy.sql.gz.sha256 && cd '$R' && gunzip -c '$RD/source-lgcy.sql.gz' | wp db import - && wp db query --skip-column-names \"SELECT k,v FROM ${PFX}dd_snapshot\"" ;;
 preflight)
   run headroom.php check $SRCARGS
-  run renumber.php audit $SRCARGS
+  run renumber.php audit $SRCARGS ${ISOLATE:+--skip-products}   # products are never relocated
   # schema: every source table used must have the same columns as the destination's
   if [ -z "$HOSTED" ]; then S=$SRCDB; else S=$DEST; fi
   Q="SELECT CONCAT(s.table_name,'.',s.column_name,' ',s.column_type,' vs ',COALESCE(d.column_type,'MISSING')) FROM information_schema.columns s LEFT JOIN information_schema.columns d ON d.table_schema='$DEST' AND d.table_name=CONCAT('wp_',SUBSTRING(s.table_name,${#PFX}+1)) AND d.column_name=s.column_name WHERE s.table_schema='$S' AND s.table_name LIKE '${PFX}%' AND s.table_name<>'${PFX}dd_snapshot' AND NOT (d.column_type <=> s.column_type)"
@@ -186,6 +186,14 @@ apply|resume)
     shasum -a 256 -c "$BACKUP.sha256" >/dev/null && [ $(( $(date +%s) - $(stat -f %m "$BACKUP") )) -lt 21600 ] || { echo "backup $BACKUP missing, unverified or older than 6h"; exit 3; }
   fi
   [ "$CMD" = resume ] && echo "resuming: completed batches are already equal and will be skipped"
+  # An interrupted run can leave its DB connection (and the dd_migration lock) behind until the server
+  # notices; wait up to 3 minutes for it to clear rather than failing at once. Never kill it blindly.
+  lockq="SELECT COALESCE(IS_USED_LOCK('dd_migration'),'')"
+  for i in $(seq 1 36); do
+    if [ -n "$HOSTED" ]; then h=$(hwp "db query --skip-column-names \"$lockq\""); else h=$(sql -e "$lockq"); fi
+    [ -z "$h" ] && break; echo "   dd_migration lock still held by DB connection $h — waiting ($i/36)"; sleep 5
+  done
+  [ -z "$h" ] || { echo "lock still held by connection $h after 3 min: confirm no migration process is running, then end that connection (KILL $h) and resume"; exit 4; }
   run sync.php apply $SYNCARGS
   # Only for DevKinsta-derived sources (non-verbatim profiles): restores the real legacy domain in legacy-owned
   # values. A verbatim production snapshot carries the real values already, so nothing is rewritten.
@@ -198,9 +206,11 @@ verify)
   else
     ./scripts/migration/postsync.sh "$DEST"
   fi
-  run reconcile.php $SRCARGS
-  run neutralize.php plan --dest="$DEST"
-  run sync.php plan $SYNCARGS; pull_reports ;;
+  # every check runs even if one fails; the command still exits non-zero when any failed
+  RF=0; run reconcile.php $SRCARGS || RF=1
+  run neutralize.php plan --dest="$DEST" || RF=1
+  run sync.php plan $SYNCARGS || RF=1; pull_reports
+  [ $RF = 0 ] || { echo "VERIFY: at least one check failed (see above)"; exit 1; } ;;
 drop-source)
   [ -n "$HOSTED" ] && [ "$CONFIRM" = "$DEST" ] || { echo "drop-source is --hosted with --confirm-dest=<db>"; exit 2; }
   $SSH "cd '$R' && for t in \$(wp db query --skip-column-names \"SELECT table_name FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE '${PFX}%'\"); do wp db query \"DROP TABLE \\\`\$t\\\`\"; done" ;;
