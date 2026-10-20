@@ -448,18 +448,25 @@ function apply(\mysqli $db, string $dest, TableRef $src, string $run, array $can
             }
         }
         record_refs($db, $dest, $run, $cols, $maps);
+        // Transient caches NAMED after a moved product (e.g. _transient_wc_related_<id>, and its timeout): the reference
+        // scan does not split "_<digits>" out of names, so delete them here; WooCommerce rebuilds them.
+        $tDel = 0;
+        foreach (array_keys(product_map()) as $old) {
+            q($db, 'DELETE FROM ' . t($dest, 'options') . " WHERE (option_name LIKE '\\_transient\\_%' OR option_name LIKE '\\_site\\_transient\\_%') AND option_name REGEXP '(^|[^0-9])$old([^0-9]|\$)'");
+            $tDel += $db->affected_rows;
+        }
         $fkCounts = [];
         foreach ($cols as [$tb, $col, $ns]) {
             q($db, "UPDATE `$dest`.`$tb` x JOIN $M m ON m.ns='$ns' AND m.old_id=x.`$col` SET x.`$col`=m.new_id");
             $fkCounts[] = $db->affected_rows;
         }
-        q($db, "INSERT INTO `$dest`.dd_mig_ledger (run_id, entity, entity_id, action, note) VALUES (" . e($db, $run) . ", 'renumber', 0, 'apply', " . e($db, json_encode(['value_rewrites' => $n, 'fk_rows' => $fkCounts])) . ')');
+        q($db, "INSERT INTO `$dest`.dd_mig_ledger (run_id, entity, entity_id, action, note) VALUES (" . e($db, $run) . ", 'renumber', 0, 'apply', " . e($db, json_encode(['value_rewrites' => $n, 'fk_rows' => $fkCounts, 'transients_named_by_moved_products_deleted' => $tDel])) . ')');
         q($db, 'COMMIT');
     } catch (\Throwable $t) {
         q($db, 'ROLLBACK');
         fail('renumber rolled back: ' . $t->getMessage());
     }
-    return $summary + ['applied' => true, 'value_rewrites' => $n, 'fk_rows' => $fkCounts];
+    return $summary + ['applied' => true, 'value_rewrites' => $n, 'fk_rows' => $fkCounts, 'transients_named_by_moved_products_deleted' => $tDel];
 }
 
 /** Canonical primary-key string of a row (key order and int/string typing do not matter). */

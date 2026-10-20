@@ -40,7 +40,7 @@ t "final-sync refuses a local command without --dest" "[ $rc = 2 ] && grep -q 'n
 for tb in $(sql -e "SELECT table_name FROM information_schema.tables WHERE table_schema='$B' AND table_name LIKE 'wp\\_%' AND table_name NOT IN (SELECT table_name FROM information_schema.tables WHERE table_schema='$G')"); do sql -e "CREATE TABLE $G.\`$tb\` LIKE $B.\`$tb\`"; done
 $R headroom.php apply --dest=$G --src=$SRC --src-prefix=lgcy_ > /dev/null 2>&1
 $R sync.php plan --src=$SRC --src-prefix=lgcy_ --dest=$G --profile=verbatim > migration-reports/tmp-guard-5.log 2>&1; rc=$?
-t "sync refuses while a product collision is undecided (no isolation flag)" "[ $rc != 0 ] && grep -q '1 destination products' migration-reports/tmp-guard-5.log"
+t "sync refuses while product collisions are undecided (no isolation flag; the fixture has exactly 2: PROD, PROD2)" "[ $rc != 0 ] && grep -q ' 2 destination products' migration-reports/tmp-guard-5.log"
 scripts/deploy/package-initial.sh guardtest > migration-reports/tmp-guard-6.log 2>&1; rc=$?
 t "packaging refuses without explicit source, legacy snapshot and baseline" "[ $rc = 2 ] && grep -q 'needs --source' migration-reports/tmp-guard-6.log && [ ! -e recovery/deploy/initial-guardtest ]"
 PS=$(docker compose --profile cli run --rm -T --no-deps --entrypoint php wpcli -r 'echo (require "scripts/migration/config.php")["product_sync"] ? 1 : 0;' 2>/dev/null)
