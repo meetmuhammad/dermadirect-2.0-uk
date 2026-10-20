@@ -7,7 +7,9 @@ set -eu
 cd "$(dirname "$0")/../.."
 DB=$1; RUN=${2:-all}
 W="./scripts/migration/wp.sh $DB"
-ADMIN=$(sed -n 's/^RH_ADMIN_LOGIN=//p' secrets/rehearsal-admin.env)
+# an administrator that exists in THIS database (a hosted-derived baseline has no local-only accounts)
+ADMIN=$($W user list --role=administrator --field=user_login | grep -E "^[A-Za-z0-9._@-]+$" | head -1)
+[ -n "$ADMIN" ] || { echo "no administrator account in $DB"; exit 2; }
 t() { s=$(date +%s); "$@"; echo "  [$(( $(date +%s)-s ))s] $*" | cut -c1-160; }
 
 # Scope 2026-10-19: the commerce-data refresh changes no destination configuration and no product
@@ -22,6 +24,8 @@ t $W wc hpos count_unmigrated
 t $W wc hpos sync --batch-size=500
 t $W wc hpos verify_data --batch-size=1000 --order-types=shop_order,shop_order_refund || echo "  HPOS verify reported mismatches: compare with the pre-sync baseline (docs/migration/PLAN.md §9.5)"
 if [ "${PRODUCT_DERIVED:-0}" = 1 ]; then
+PS=$(docker compose --profile cli run --rm -T --no-deps --entrypoint php wpcli -r 'echo (require "scripts/migration/config.php")["product_sync"] ? 1 : 0;' 2>/dev/null)
+[ "$PS" = 1 ] || { echo "refusing PRODUCT_DERIVED=1: product_sync is off (destination products are never written)"; exit 2; }
 echo "== product derived data"
 t $W wc tool run regenerate_product_lookup_tables --user="$ADMIN"
 t $W wc tool run recount_terms --user="$ADMIN"

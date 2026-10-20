@@ -204,6 +204,14 @@ class Helper
             }
         }
 
+        // Customer-specific offer (business rule in mu-plugins/dd-commerce-rules.php, e.g. Nexfill Switch):
+        // an eligible customer sees only the offer price, with no struck-through regular price.
+        $offer = apply_filters('dd_customer_offer_price', null, $product);
+        if ($offer !== null) {
+            $regular = $sale = (float) $offer;
+            $on_sale = false;
+        }
+
         $purchase_raw = min($regular, $sale ?: $regular);
 
         $discount = $on_sale && $regular > 0

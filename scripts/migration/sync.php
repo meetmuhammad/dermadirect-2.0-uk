@@ -47,6 +47,8 @@ final class Sync
     private array $cols = [];
     private array $types = [];
     public array $report = ['url_rewrite_unresolved' => []];
+    /** Legacy record IDs held by destination products (isolated by --isolate-product-conflicts): never written. */
+    public array $isolated = [];
     private array $pairs;
 
     private TableRef $dt;
@@ -235,10 +237,13 @@ final class Sync
         $hd = $this->h('d', $cols, $table);
         $S = $this->st[$table];
         $D = "`{$this->dest}`.`$table`";
+        // rows belonging to isolated legacy orders are never copied
+        $iso = $this->isolated && in_array('order_id', $cols, true) ? ' AND s.order_id NOT IN (' . implode(',', $this->isolated) . ')' : '';
         return [
-            'new' => array_map('intval', array_column(rows($this->db, "SELECT s.`$pk` id FROM $S s LEFT JOIN $D d ON d.`$pk`=s.`$pk` WHERE d.`$pk` IS NULL"), 'id')),
-            'changed' => array_map('intval', array_column(rows($this->db, "SELECT s.`$pk` id FROM $S s JOIN $D d ON d.`$pk`=s.`$pk` WHERE $hs <> $hd"), 'id')),
-            'same' => (int) one($this->db, "SELECT COUNT(*) FROM $S s JOIN $D d ON d.`$pk`=s.`$pk` WHERE $hs = $hd"),
+            'new' => array_map('intval', array_column(rows($this->db, "SELECT s.`$pk` id FROM $S s LEFT JOIN $D d ON d.`$pk`=s.`$pk` WHERE d.`$pk` IS NULL$iso"), 'id')),
+            'changed' => array_map('intval', array_column(rows($this->db, "SELECT s.`$pk` id FROM $S s JOIN $D d ON d.`$pk`=s.`$pk` WHERE $hs <> $hd$iso"), 'id')),
+            'same' => (int) one($this->db, "SELECT COUNT(*) FROM $S s JOIN $D d ON d.`$pk`=s.`$pk` WHERE $hs = $hd$iso"),
+            'isolated_rows' => $iso ? (int) one($this->db, "SELECT COUNT(*) FROM $S s WHERE s.order_id IN (" . implode(',', $this->isolated) . ')') : 0,
             'dest_only' => array_map('intval', array_column(rows($this->db, "SELECT d.`$pk` id FROM $D d LEFT JOIN $S s ON s.`$pk`=d.`$pk` WHERE s.`$pk` IS NULL"), 'id')),
         ];
     }
@@ -355,6 +360,7 @@ final class Sync
             $diff = array_map('intval', array_column(rows($this->db, "SELECT x.id FROM (SELECT id FROM ({$g($srcT,'a')}) u UNION SELECT id FROM ({$g($dstT,'b')}) v) x
                 LEFT JOIN ({$g($srcT,'c')}) s ON s.id=x.id LEFT JOIN ({$g($dstT,'d')}) d ON d.id=x.id
                 WHERE NOT (s.s <=> d.s AND s.n <=> d.n) AND x.id IN (SELECT ID FROM {$ST['posts']} WHERE post_type IN ('shop_order','shop_order_refund'))"), 'id'));
+            $diff = array_values(array_diff($diff, $this->isolated));
             $out[$t] = count($diff);
             if ($apply) {
                 foreach (array_chunk($diff, 5000) as $ch) {
@@ -554,7 +560,7 @@ function group_roles(\mysqli $db, TableRef $ST, string $dest, bool $apply): arra
     return $out;
 }
 
-function plan_and_apply(\mysqli $db, TableRef $ST, string $dest, string $run, bool $apply, array $only, int $batch, string $profile): array
+function plan_and_apply(\mysqli $db, TableRef $ST, string $dest, string $run, bool $apply, array $only, int $batch, string $profile, bool $isolateProducts = false): array
 {
     $sum = [];
     $rw = cfg()['url_rewrite'];
@@ -602,8 +608,19 @@ function plan_and_apply(\mysqli $db, TableRef $ST, string $dest, string $run, bo
         write_csv("$rep/sync-$entity-exceptions.csv", ['id', 'class', 'detail'], array_merge(
             array_map(fn ($c) => [$c['id'], 'conflict', "source {$c['src_type']} vs destination {$c['dest_type']}"], $g['conflict']),
             array_map(fn ($id) => [$id, 'destination-only', 'kept, not deleted'], $g['dest_only'])));
-        if ($g['conflict']) {
-            fail("$entity: " . count($g['conflict']) . ' ID conflicts — run renumber.php first (see sync-' . $entity . '-exceptions.csv)');
+        // A legacy record whose ID is held by a destination product cannot be written without relocating the
+        // product (never done here). With --isolate-product-conflicts it is left out — with its order-linked
+        // plugin and analytics rows — and listed for decision; any other conflict still stops the run.
+        $productHeld = array_values(array_filter($g['conflict'], fn ($c) => in_array($c['dest_type'], ['product', 'product_variation'], true)));
+        $other = array_values(array_filter($g['conflict'], fn ($c) => !in_array($c['dest_type'], ['product', 'product_variation'], true)));
+        if ($other || ($productHeld && !$isolateProducts)) {
+            fail("$entity: " . count($g['conflict']) . ' ID conflicts (' . count($productHeld) . ' held by destination products) — run renumber.php first, or decide the product collisions (see sync-' . $entity . '-exceptions.csv)');
+        }
+        if ($productHeld) {
+            $s->isolated = array_values(array_unique(array_merge($s->isolated, array_map(fn ($c) => (int) $c['id'], $productHeld))));
+            $sum[$entity]['isolated_product_conflicts'] = array_map(fn ($c) => (int) $c['id'], $productHeld);
+            write_csv("$rep/sync-isolated-$entity.csv", ['legacy_id', 'legacy_type', 'destination_type', 'status'],
+                array_map(fn ($c) => [$c['id'], $c['src_type'], $c['dest_type'], 'isolated: not migrated, decision pending'], $productHeld));
         }
         if ($entity === 'coupons') {
             // Duplicate-code conflicts: a destination-only coupon (not a legacy record) using a legacy code.
@@ -685,8 +702,11 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
         fail('headroom preflight failed: ' . json_encode(array_filter(array_map(fn ($x) => $x['problems'], $h['tables']))));
     }
     $cand = candidates($db, $dest, $src);
-    if ($cand['posts'] || $cand['users']) {
-        fail('new ID collisions: ' . count($cand['posts']) . ' destination posts / ' . count($cand['users']) . ' users sit in legacy ID space — run renumber.php audit/apply first');
+    $isolate = isset($a['isolate-product-conflicts']);
+    $prodCand = product_candidates($db, $dest, $cand['posts']);
+    $nonProduct = array_values(array_diff($cand['posts'], array_keys($prodCand)));
+    if ($nonProduct || $cand['users'] || ($prodCand && !$isolate)) {
+        fail('new ID collisions: ' . count($nonProduct) . ' destination posts, ' . count($prodCand) . ' destination products, ' . count($cand['users']) . ' users sit in legacy ID space — run renumber.php audit/apply first (products are never relocated: decide them, or pass --isolate-product-conflicts)');
     }
     // Every table the sync reads must exist in the source (fail before writing anything).
     $need = ['posts', 'postmeta', 'users', 'usermeta', 'comments', 'commentmeta', 'woocommerce_order_items', 'woocommerce_order_itemmeta', 'terms',
@@ -709,7 +729,7 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     $t0 = microtime(true);
     $only = isset($a['only']) ? explode(',', $a['only']) : [];
     $sum = ['source' => $identity, 'destination' => ['schema' => $dest, 'home' => one($db, "SELECT option_value FROM `$dest`.wp_options WHERE option_name='home'"), 'run' => $run]];
-    $sum += plan_and_apply($db, $src, $dest, $run, $mode === 'apply', $only, (int) ($a['batch'] ?? 500), $a['profile'] ?? 'auto');
+    $sum += plan_and_apply($db, $src, $dest, $run, $mode === 'apply', $only, (int) ($a['batch'] ?? 500), $a['profile'] ?? fail('--profile required (verbatim | auto | rehearsal | kinsta-final)'), $isolate);
     if ($mode === 'apply') {
         $after = source_identity($db, $src);
         $sum['source_unchanged_during_run'] = ($after['checksum'] ?? null) === ($identity['checksum'] ?? null);

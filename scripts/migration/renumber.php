@@ -40,7 +40,7 @@ function text_rules(): array
 {
     return [
         'posts' => [
-            'wp_posts.guid|*' => ['pat', ['query_id']],
+            'wp_posts.guid|*' => ['pat', ['query_id', 'path_id']],
             'wp_posts.post_name|revision' => ['pat', ['revision_name']],
             'wp_posts.post_name|nav_menu_item' => ['pat', ['whole']],
             'wp_posts.post_content|*' => ['blocks', null],
@@ -562,6 +562,19 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
         exit($bad ? 1 : 0);
     }
     $cands = candidates($db, $dest, $src);
+    // Product guard: destination products/variations are never relocated. Without --skip-products the run
+    // stops; with it they stay at their IDs, are listed, and the legacy records they block are left to the
+    // sync's explicit isolation (sync.php --isolate-product-conflicts) pending a decision.
+    $prod = product_candidates($db, $dest, $cands['posts']);
+    if ($prod) {
+        write_csv(report_dir() . '/renumber-product-collisions.csv', ['destination_id', 'type', 'status', 'title', 'sku'],
+            array_map(fn ($id, $p) => [$id, ...$p], array_keys($prod), $prod));
+        if (!isset($a['skip-products'])) {
+            fail(count($prod) . ' destination products/variations sit in legacy ID space (renumber-product-collisions.csv). Products are never relocated: decide, or pass --skip-products to move only non-product records');
+        }
+        $cands['posts'] = array_values(array_diff($cands['posts'], array_keys($prod)));
+        out('product guard: ' . count($prod) . ' destination products/variations left in place (not relocated)');
+    }
     out('candidates: posts=' . count($cands['posts']) . ' users=' . count($cands['users']));
     $run = start_run($db, $dest, "renumber-$mode", $a);
     if ($mode === 'audit') {

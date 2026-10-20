@@ -1,17 +1,27 @@
 #!/bin/sh
-# Builds the private Action A data package from the clean canonical local site (dermadirect_local).
-#   scripts/deploy/package-initial.sh <label>      -> recovery/deploy/initial-<label>/
-# Works on an export copy (dd_rh_test_export); dermadirect_local is only read.
-# Transform: remove local-only records (local admin 47553 + its auto-draft), drop scratch tables,
-# neutralise webhooks/queued actions, clear transients/sessions, rewrite localhost URLs to the review
-# URL (serialization-safe, per table) and verify no local URL, test marker or local path remains.
-# Package: db.sql.gz, uploads delta (renumbered files), retained-plugin bundle, remote scripts, manifest.
+# Builds the private Action A data package from a verified migrated candidate database.
+#   scripts/deploy/package-initial.sh <label> --source=<candidate db> --legacy-snapshot=<dd_rh_src_* db>
+#        --baseline-dir=<recovery/final-sync/<pull label>> [--uploads-dir=<dir>] [--rewrite-from=<url>]
+#   -> recovery/deploy/initial-<label>/   (an existing package directory is never reused)
+# Works on a per-label export copy (dd_rh_test_export_<label>); the candidate is only read.
+# Transform: remove local-only records, drop scratch tables, neutralise webhooks/queued actions, clear
+# transients/sessions. No URL rewrite unless --rewrite-from is given (a candidate built on a pulled hosted
+# baseline already carries the review URL; commerce values are verbatim production values). Strict checks:
+# no local URL, test marker or local path in legacy-owned records; legacy-owned values identical to the
+# candidate's. The manifest records the real legacy snapshot and destination baseline identities, and the
+# baseline fingerprint travels with the package for Action A's drift guard.
 set -eu
-LABEL=${1:?label}
+LABEL=${1:?label}; shift
+SRC=""; LEG=""; BASE=""; UPL=web/app/uploads; FROM=""
+for a in "$@"; do case "$a" in --source=*) SRC=${a#*=};; --legacy-snapshot=*) LEG=${a#*=};; --baseline-dir=*) BASE=${a#*=};; --uploads-dir=*) UPL=${a#*=};; --rewrite-from=*) FROM=${a#*=};; *) echo "unknown option $a"; exit 2;; esac; done
 cd "$(dirname "$0")/../.."
+[ -n "$SRC" ] && [ -n "$LEG" ] && [ -n "$BASE" ] || { echo "needs --source=<candidate db> --legacy-snapshot=<source db> --baseline-dir=<pull dir>"; exit 2; }
+for f in destination-identity.tsv dest-fingerprint.tsv; do [ -s "$BASE/$f" ] || { echo "baseline dir lacks $f (pull it with final-sync.sh pull-dest)"; exit 2; }; done
 . ./.deploy-targets
-URL=$KINSTA_REVIEW_URL; FROM=http://localhost:8088; X=dd_rh_test_export
-OUT=recovery/deploy/initial-$LABEL; mkdir -p "$OUT/uploads" "$OUT/remote"; chmod 700 recovery/deploy "$OUT"
+URL=$KINSTA_REVIEW_URL; X=dd_rh_test_export_$(echo "$LABEL" | tr -c 'a-z0-9_\n' '_')
+OUT=recovery/deploy/initial-$LABEL
+[ -z "${RESUME_AT:-}" ] && [ -e "$OUT" ] && { echo "refusing: $OUT exists (packages are never rebuilt in place; use a new label)"; exit 2; }
+mkdir -p "$OUT/uploads" "$OUT/remote"; chmod 700 recovery/deploy "$OUT"
 C=dermadirect20uk-db-1
 sql() { docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -N "$@"' sh "$@"; }
 wpx() { DB_NAME=$X docker compose --profile cli run --rm -T --no-deps --entrypoint sh wpcli -c "php -d memory_limit=4G /usr/local/bin/wp $* --skip-plugins --skip-themes 2>&1 | grep -v -e WC_SA_Email -e FS_Plugin" 2>/dev/null; }
@@ -19,12 +29,12 @@ R=./scripts/migration/run.sh
 if [ "${RESUME_AT:-}" = residual ] || [ "${RESUME_AT:-}" = after-dump ]; then
   # Resume after an interruption past the URL rewrite: only if the scratch copy is fully transformed.
   [ "$(sql -e "SELECT option_value FROM $X.wp_options WHERE option_name='home'")" = "$URL" ] || { echo "cannot resume: $X is not fully transformed"; exit 1; }
-  [ -z "$(sql -e "SELECT 1 FROM $X.wp_postmeta WHERE meta_value LIKE '%$FROM%' LIMIT 1")" ] || { echo "cannot resume: $X still has $FROM values"; exit 1; }
+  [ -z "$FROM" ] || [ -z "$(sql -e "SELECT 1 FROM $X.wp_postmeta WHERE meta_value LIKE '%$FROM%' LIMIT 1")" ] || { echo "cannot resume: $X still has $FROM values"; exit 1; }
   echo "== resuming at residual checks ($X already transformed)"
 else
-echo "== export copy of dermadirect_local"
-./scripts/migration/snapshot.sh dump dermadirect_local "$OUT/source-dermadirect_local.sql.gz"
-./scripts/migration/snapshot.sh restore "$OUT/source-dermadirect_local.sql.gz" $X
+echo "== export copy of $SRC"
+./scripts/migration/snapshot.sh dump "$SRC" "$OUT/source-candidate.sql.gz"
+./scripts/migration/snapshot.sh restore "$OUT/source-candidate.sql.gz" $X
 echo "== remove local-only records"
 sql -e "DELETE FROM $X.wp_usermeta WHERE user_id=47553; DELETE FROM $X.wp_users WHERE ID=47553 AND user_login='dermadirect-local-admin';
         DELETE FROM $X.wp_postmeta WHERE post_id IN (SELECT ID FROM $X.wp_posts WHERE post_author=47553 AND post_status='auto-draft');
@@ -35,12 +45,16 @@ sql -e "DELETE FROM $X.wp_usermeta WHERE user_id=47553; DELETE FROM $X.wp_users 
         TRUNCATE $X.wp_woocommerce_sessions;"
 for t in $(sql -e "SELECT table_name FROM information_schema.tables WHERE table_schema='$X' AND table_name LIKE 'dd\\_mig\\_h\\_%'"); do sql -e "DROP TABLE $X.\`$t\`"; done
 echo "== neutralise integrations"; $R neutralize.php apply --dest=$X
-echo "== URL rewrite $FROM -> $URL"
+if [ -n "$FROM" ]; then
+echo "== URL rewrite $FROM -> $URL (explicit --rewrite-from)"
 TABLES=$(sql -e "SELECT DISTINCT table_name FROM information_schema.columns WHERE table_schema='$X' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext') AND table_name LIKE 'wp\\_%'")
 for t in $TABLES; do
   hit=$(sql -e "SELECT CONCAT('SELECT 1 FROM \`$X\`.\`$t\` WHERE ', GROUP_CONCAT(CONCAT('\`',column_name,'\` LIKE ''%$FROM%''') SEPARATOR ' OR '), ' LIMIT 1') FROM information_schema.columns WHERE table_schema='$X' AND table_name='$t' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext')" | sql)
   [ -n "$hit" ] && wpx search-replace "'$FROM'" "'$URL'" "$t" --all-tables --precise --report-changed-only | grep -E "Success|Error" | sed "s/^/   $t: /"
 done
+else
+  echo "== no URL rewrite (environment URLs: home/siteurl are set by initial-import.sh; content keeps the baseline's URLs)"
+fi
 fi
 if [ "${RESUME_AT:-}" = after-dump ]; then
   gunzip -c "$OUT/db.sql.gz" | tail -c 300 | grep -q -- '-- Dump completed' && [ -f "$OUT/residuals-reported.tsv" ] && [ ! -f "$OUT/residuals.txt" ] || { echo "cannot resume after dump: dump missing/corrupt or strict residuals recorded"; exit 1; }
@@ -55,7 +69,7 @@ COMMERCE="SELECT ID FROM $X.wp_posts WHERE post_type IN ('shop_order','shop_orde
 CUSTOMERS="SELECT user_id FROM $X.wp_usermeta WHERE meta_key='wp_capabilities' AND (meta_value LIKE '%\"customer\"%' OR meta_value LIKE '%\"blocked_customer\"%')"
 KEYED="wp_wc_orders wp_wc_order_addresses wp_wc_orders_meta wp_wc_order_operational_data wp_woocommerce_order_items wp_woocommerce_order_itemmeta wp_woocommerce_payment_tokens wp_woocommerce_payment_tokenmeta wp_webis_pbet wp_webis_pbet_order wp_webis_pbet_order_item wp_woocommerce_bis_notifications wp_woocommerce_bis_notificationsmeta wp_woocommerce_bis_activity wp_gens_raf wp_gens_rafmeta wp_gens_raf_guest_referrals wp_wt_sc_coupon_lookup wp_wdr_order_item_discounts wp_pp_order_actions_log wp_trackship_shipment wp_trackship_shipment_meta wp_zorem_email_sms_log wp_stock_log wp_wc_order_stats wp_wc_order_product_lookup wp_wc_order_tax_lookup wp_wc_order_coupon_lookup wp_wc_customer_lookup"
 : > "$OUT/residuals-reported.tsv"
-for needle in "$FROM" "localhost:8089" "httpsdermadirectcom.local" "/var/www/html" "DD-MIGRATION-TEST" "@example.invalid"; do
+for needle in "localhost:808" "127.0.0.1:808" "httpsdermadirectcom.local" "/var/www/html" "DD-MIGRATION-TEST" "@example.invalid"; do
   n=0
   n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_posts WHERE ID IN ($COMMERCE) AND ($(txtcols wp_posts "$needle"))")))
   n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_postmeta WHERE post_id IN ($COMMERCE) AND meta_value LIKE '%$needle%'")))
@@ -73,15 +87,17 @@ WANT=$(sql -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema
 gunzip -c "$OUT/db.sql.gz" | tail -c 300 | grep -q -- '-- Dump completed' && [ "$(gunzip -c "$OUT/db.sql.gz" | grep -c '^CREATE TABLE')" -ge "$WANT" ] || { echo "PACKAGE DUMP INCOMPLETE"; rm -f "$OUT/db.sql.gz"; exit 1; }
 fi
 echo "== legacy-owned values unchanged by packaging (emails, notes, corrected legacy domain)"
-scripts/deploy/check-legacy-values.sh dermadirect_local "$X" "$FROM" "$URL" > "$OUT/legacy-values-check.txt" || { cat "$OUT/legacy-values-check.txt"; echo "PACKAGE REFUSED: packaging changed legacy-owned values"; exit 1; }
+scripts/deploy/check-legacy-values.sh "$SRC" "$X" "${FROM:-$URL}" "$URL" > "$OUT/legacy-values-check.txt" || { cat "$OUT/legacy-values-check.txt"; echo "PACKAGE REFUSED: packaging changed legacy-owned values"; exit 1; }
 cat "$OUT/legacy-values-check.txt"
 echo "== account identity digest (for identity-based staff restore on the server; SHA-256, no personal data)"
 $R restore-staff.php identity --dest=$X --out="/var/www/html/$OUT/users-identity.tsv"; chmod 600 "$OUT/users-identity.tsv"
 echo "== uploads delta (files renamed by renumbering)"
-sql -e "SELECT new_id FROM $X.dd_mig_idmap WHERE ns='posts'" | while read id; do f=web/app/uploads/generateblocks/style-$id.css; if [ -f "$f" ]; then mkdir -p "$OUT/uploads/generateblocks" && cp -p "$f" "$OUT/uploads/generateblocks/"; fi; done
+sql -e "SELECT new_id FROM $X.dd_mig_idmap WHERE ns='posts'" | while read id; do f=$UPL/generateblocks/style-$id.css; if [ -f "$f" ]; then mkdir -p "$OUT/uploads/generateblocks" && cp -p "$f" "$OUT/uploads/generateblocks/"; fi; done
 # shipped files get the same address rewrite as the database (plain and JSON-escaped), then a strict check
+if [ -n "$FROM" ]; then
 FROMJ=$(printf '%s' "$FROM" | sed 's#/#\\\\/#g'); URLJ=$(printf '%s' "$URL" | sed 's#/#\\\\/#g')
 find "$OUT/uploads" -type f | while read -r f; do LC_ALL=C sed -i '' -e "s#$FROM#$URL#g" -e "s#$FROMJ#$URLJ#g" "$f"; done
+fi
 LEFT=$(grep -rlE 'https?:(\\?/){2}(localhost|127\.0\.0\.1)|:808[89]' "$OUT/uploads" || true)
 [ -z "$LEFT" ] || { echo "PACKAGE REFUSED: local address left in shipped files: $LEFT"; exit 1; }
 echo "   shipped upload files: no local address"
@@ -91,13 +107,18 @@ cp scripts/deploy/remote/*.sh "$OUT/remote/"
 echo "== manifest"
 COUNTS=$(sql -e "SELECT CONCAT('{\"orders_by_status\":{', GROUP_CONCAT(CONCAT('\"',post_type,'/',post_status,'\":',n)), '}') FROM (SELECT post_type, post_status, COUNT(*) n FROM $X.wp_posts WHERE post_type IN ('shop_order','shop_order_refund') GROUP BY 1,2) z")
 EXTRA=$(sql -e "SELECT CONCAT(',\"users\":',(SELECT COUNT(*) FROM $X.wp_users),',\"products\":',(SELECT COUNT(*) FROM $X.wp_posts WHERE post_type IN ('product','product_variation')),',\"coupons\":',(SELECT COUNT(*) FROM $X.wp_posts WHERE post_type='shop_coupon'),',\"idmap\":',(SELECT COUNT(*) FROM $X.dd_mig_idmap),',\"max_order_id\":',(SELECT MAX(ID) FROM $X.wp_posts WHERE post_type='shop_order'),',\"active_webhooks\":',(SELECT COUNT(*) FROM $X.wp_wc_webhooks WHERE status='active'),',\"pending_actions\":',(SELECT COUNT(*) FROM $X.wp_actionscheduler_actions WHERE status='pending'),'}')")
+SNAPID=$(sql -e "SELECT CONCAT('{',GROUP_CONCAT(CONCAT('\"',k,'\":\"',REPLACE(v,'\"',''),'\"') ORDER BY k),'}') FROM \`$LEG\`.lgcy_dd_snapshot")
+BASEID=$(awk -F'\t' '{gsub(/"/,"",$2); printf "%s\"%s\":\"%s\"", (NR>1?",":""), $1, $2}' "$BASE/destination-identity.tsv")
+cp "$BASE/dest-fingerprint.tsv" "$OUT/destination-fingerprint.tsv"; cp "$BASE/destination-identity.tsv" "$OUT/destination-identity.tsv"
 cat > "$OUT/manifest.json" <<JSON
-{"label":"$LABEL","created_utc":"$(date -u +%FT%TZ)","code_commit":"$(git rev-parse HEAD)","target_url":"$URL","source_db":"dermadirect_local (via $X)",
- "legacy_snapshot":"legacy_snapshot_20260927 (DevKinsta legacy DB, latest order 2026-09-26 20:36)","counts":$COUNTS$EXTRA,
- "excluded":["local admin 47553 + auto-draft","transients, sessions, session_tokens","synthetic DD-MIGRATION-TEST records (removed before packaging)","Docker/.env/local mu-plugins (not in package)"],
- "preserved_on_import_from_hosted":["staff/admin users (non-customer roles) and their usermeta","gateway/SMTP/integration options (see remote/initial-import.sh)",".env, uploads, server plugins"]}
+{"label":"$LABEL","created_utc":"$(date -u +%FT%TZ)","code_commit":"$(git rev-parse HEAD)","target_url":"$URL",
+ "candidate_db":"$SRC","candidate_sha256":"$(cut -d' ' -f1 "$OUT/source-candidate.sql.gz.sha256" 2>/dev/null)",
+ "legacy_snapshot":$SNAPID,"destination_baseline":{$BASEID},"url_rewrite":"${FROM:-none}","counts":$COUNTS$EXTRA,
+ "excluded":["local-only records","transients, sessions, session_tokens","synthetic DD-MIGRATION-TEST records","Docker/.env/local mu-plugins (not in package)"],
+ "preserved_on_import_from_hosted":["staff/admin users by identity (restore-staff.php)","retained gateway/SMTP/integration options (initial-import.sh RETAIN)",".env, uploads, server plugins"],
+ "drift_guard":"initial-import.sh refuses unless the hosted fingerprint equals destination-fingerprint.tsv"}
 JSON
-rm -f "$OUT/source-dermadirect_local.sql.gz" "$OUT/source-dermadirect_local.sql.gz.sha256"
+rm -f "$OUT/source-candidate.sql.gz" "$OUT/source-candidate.sql.gz.sha256"
 (cd "$OUT" && find . -type f ! -name SHA256SUMS | sort | xargs shasum -a 256 > SHA256SUMS)
 [ -f "$OUT/residuals.txt" ] && { echo "PACKAGE HAS STRICT RESIDUALS — review $OUT/residuals.txt; not usable"; exit 1; }
 echo "reported (pre-existing, destination-owned or inert) residual locations: $(wc -l < "$OUT/residuals-reported.tsv") — see residuals-reported.tsv"

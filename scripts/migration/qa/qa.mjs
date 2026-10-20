@@ -137,7 +137,8 @@ async function login(page, user, pass) {
 
 // Fail closed: with --map, every host except localhost resolves to nothing, so a request the route above
 // does not serve (e.g. an unrouted redirect) can never reach the real site or any other host.
-const browser = await chromium.launch(MAP ? { args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1'] } : {});
+const LOCAL_BASE = ['localhost', '127.0.0.1'].includes(BASEHOST);
+const browser = await chromium.launch(MAP || LOCAL_BASE ? { args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE localhost, EXCLUDE 127.0.0.1'] } : {});
 try {
   // Public pages, desktop and mobile
   for (const [vp, size] of [['desktop', { width: 1440, height: 900 }], ['mobile', { width: 390, height: 844 }]]) {

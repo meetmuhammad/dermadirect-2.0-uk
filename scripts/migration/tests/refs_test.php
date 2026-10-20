@@ -48,6 +48,8 @@ check('ser non-roundtrip refused when hit', rewrite_serialized('a:1:{s:1:"x";s:6
 
 // text patterns (guid, slugs, html)
 check('guid ?p=', rewrite_patterns('https://x/?p=696260', $map, ['query_id'])['value'] === 'https://x/?p=9696260');
+check('guid path form /<id>/ (menu items)', rewrite_patterns('https://x.kinsta.cloud/696260/', $map, ['query_id', 'path_id'])['value'] === 'https://x.kinsta.cloud/9696260/');
+check('path_id never matches a longer path or a slug', rewrite_patterns('https://x/shop/696260/', $map, ['path_id'])['value'] === 'https://x/shop/696260/' && rewrite_patterns('https://x/696260-a/', $map, ['path_id'])['value'] === 'https://x/696260-a/');
 check('guid page_id with entity', rewrite_patterns('/?post_type=wpcf7&#038;p=696260', $map, ['query_id'])['value'] === '/?post_type=wpcf7&#038;p=9696260');
 check('revision slug', rewrite_patterns('696276-revision-v1', $map, ['revision_name'])['value'] === '9696276-revision-v1');
 $r = rewrite_patterns('see 696260 here', $map, ['query_id']);

@@ -23,9 +23,9 @@
 set -eu
 cd "$(dirname "$0")/../.."
 CMD=${1:?command}; LABEL=${2:?label}; shift 2
-HOSTED=""; DEST=dd_rh_dest; CONFIRM=""; BACKUP=""; FROMDUMP=""; FROMLEGACY=""
+HOSTED=""; DEST=""; CONFIRM=""; ISOLATE=""; PROFILE=verbatim; BACKUP=""; FROMDUMP=""; FROMLEGACY=""
 for a in "$@"; do case "$a" in
-  --hosted) HOSTED=1;; --dest=*) DEST=${a#*=};; --confirm-dest=*) CONFIRM=${a#*=};; --backup=*) BACKUP=${a#*=};; --from-dump=*) FROMDUMP=${a#*=};; --from-legacy-kinsta) FROMLEGACY=1;;
+  --hosted) HOSTED=1;; --with-uploads) ;; --isolate-product-conflicts) ISOLATE=--isolate-product-conflicts;; --profile=*) PROFILE=${a#*=};; --dest=*) DEST=${a#*=};; --confirm-dest=*) CONFIRM=${a#*=};; --backup=*) BACKUP=${a#*=};; --from-dump=*) FROMDUMP=${a#*=};; --from-legacy-kinsta) FROMLEGACY=1;;
   *) echo "unknown option $a"; exit 2;; esac; done
 DIR=recovery/final-sync/$LABEL; mkdir -p "$DIR/reports"; chmod 700 recovery/final-sync "$DIR"
 C=dermadirect20uk-db-1; SRCDB=dd_rh_src_$(echo "$LABEL" | tr -c 'a-z0-9_\n' '_'); PFX=lgcy_
@@ -47,7 +47,10 @@ if [ -n "$HOSTED" ]; then
   hphp() { $SSH "cd '$R' && MIG_HOSTED=1 MIG_BEDROCK_ROOT='$R' MIG_REPORT_DIR='$RD/reports' php scripts/migration/$*"; }
   hwp() { $SSH "cd '$R' && wp $*"; }
 fi
+case "$CMD" in snapshot|pull-dest|upload) ;; *) [ -n "$HOSTED" ] || [ -n "$DEST" ] || { echo "$CMD needs an explicit --dest=<db> (or --hosted)"; exit 2; };; esac
 SRCARGS="--src=${HOSTED:+$DEST}${HOSTED:-$SRCDB} --src-prefix=$PFX --dest=$DEST"
+# Commerce values are copied byte for byte (profile verbatim) unless another profile is named explicitly.
+SYNCARGS="$SRCARGS --profile=$PROFILE $ISOLATE"
 run() { # tool args... (local: docker runner; hosted: php over SSH)
   if [ -n "$HOSTED" ]; then hphp "$* --confirm-dest=$DEST"; else ./scripts/migration/run.sh "$@"; fi
 }
@@ -130,12 +133,33 @@ backup)
   fi
   echo "backup ready — use: --backup=$B" ;;
 pull-dest)
-  [ -n "$HOSTED" ] || { . ./.deploy-targets; }
-  T=dd_rh_dest_$(echo "$LABEL" | tr -c 'a-z0-9_\n' '_')
-  ssh -p "$KINSTA_REVIEW_PORT" -o BatchMode=yes "$KINSTA_REVIEW_SSH" "cd '$KINSTA_REVIEW_ROOT' && wp db export - --single-transaction --quick" | gzip -6 > "$DIR/hosted-dest.sql.gz"
-  shasum -a 256 "$DIR/hosted-dest.sql.gz" > "$DIR/hosted-dest.sql.gz.sha256"
+  # Read-only copy of the hosted new site, preserved as a protected baseline (dd_rh_test_base_<label>).
+  # Fingerprint (remote/dest-fingerprint.sh) before and after one --single-transaction export; any
+  # difference means the site changed during the pull and the copy is refused. The fingerprint is kept
+  # for Action A's drift guard. --with-uploads also pulls web/app/uploads read-only (rsync).
+  . ./.deploy-targets
+  RS="ssh -p $KINSTA_REVIEW_PORT -o BatchMode=yes $KINSTA_REVIEW_SSH"
+  T=dd_rh_test_base_$(echo "$LABEL" | tr -c 'a-z0-9_\n' '_')
+  fp() { $RS "bash -s -- '$KINSTA_REVIEW_ROOT'" < scripts/deploy/remote/dest-fingerprint.sh; }
+  fp > "$DIR/dest-fingerprint-before.tsv"
+  T0=$(date -u +%FT%TZ)
+  $RS "cd '$KINSTA_REVIEW_ROOT' && set -o pipefail && wp db export - --single-transaction --quick --skip-triggers --hex-blob --default-character-set=utf8mb4 | gzip -1" > "$DIR/hosted-dest.sql.gz"
+  T1=$(date -u +%FT%TZ)
+  fp > "$DIR/dest-fingerprint-after.tsv"
+  cmp -s "$DIR/dest-fingerprint-before.tsv" "$DIR/dest-fingerprint-after.tsv" || { echo "destination changed during the pull (fingerprints differ) — refusing this copy; pull again during a content freeze"; diff "$DIR/dest-fingerprint-before.tsv" "$DIR/dest-fingerprint-after.tsv" | head; exit 1; }
+  cp "$DIR/dest-fingerprint-after.tsv" "$DIR/dest-fingerprint.tsv"
+  gunzip -t "$DIR/hosted-dest.sql.gz" && gunzip -c "$DIR/hosted-dest.sql.gz" | tail -c 300 | grep -q -- '-- Dump completed' || { echo "hosted dump incomplete — refusing"; exit 1; }
+  chmod 600 "$DIR/hosted-dest.sql.gz"; shasum -a 256 "$DIR/hosted-dest.sql.gz" > "$DIR/hosted-dest.sql.gz.sha256"
+  { echo "label	$LABEL"; echo "export_started_utc	$T0"; echo "export_finished_utc	$T1"
+    echo "host	$($RS hostname)"; echo "root	$KINSTA_REVIEW_ROOT"; echo "code_commit	$($RS "cd '$KINSTA_REVIEW_ROOT' && git rev-parse HEAD && git status --porcelain | wc -l" | tr '\n' ' ')"
+    echo "database	$(printf 'SELECT CONCAT(DATABASE()," / ",@@version);\n' | $RS "cd '$KINSTA_REVIEW_ROOT' && wp db query --skip-column-names 2>/dev/null")"
+    echo "method	wp db export --single-transaction --quick (InnoDB), fingerprint identical before/after"
+    echo "dump_sha256	$(cut -d' ' -f1 "$DIR/hosted-dest.sql.gz.sha256")"; echo "fingerprint_sha256	$(shasum -a 256 "$DIR/dest-fingerprint.tsv" | cut -d' ' -f1)"; echo "tables	$(gunzip -c "$DIR/hosted-dest.sql.gz" | grep -c '^CREATE TABLE')"; } > "$DIR/destination-identity.tsv"
+  $RS "cd '$KINSTA_REVIEW_ROOT/web/app/plugins' && for d in */; do f=\$(grep -l 'Plugin Name' \$d*.php 2>/dev/null | head -1); echo \"\${d%/}	\$(grep -m1 -i 'Version:' \$f 2>/dev/null | sed 's/.*Version: *//')\"; done" > "$DIR/hosted-plugins.tsv"
+  case " $* " in *" --with-uploads "*) rsync -a --delete -e "ssh -p $KINSTA_REVIEW_PORT -o BatchMode=yes" "$KINSTA_REVIEW_SSH:$KINSTA_REVIEW_ROOT/web/app/uploads/" "$DIR/uploads/" && echo "uploads: $(du -sh "$DIR/uploads" | cut -f1)";; esac
   ./scripts/migration/snapshot.sh restore "$DIR/hosted-dest.sql.gz" "$T"
-  echo "local copy of the hosted destination: $T (use --dest=$T)" ;;
+  cat "$DIR/destination-identity.tsv"
+  echo "protected baseline: $T. Make a working copy with: scripts/migration/snapshot.sh restore $DIR/hosted-dest.sql.gz dd_rh_dest_<name>" ;;
 upload)
   [ -n "$HOSTED" ] || { echo "upload is --hosted only"; exit 2; }
   shasum -a 256 -c "$DIR/source-lgcy.sql.gz.sha256" >/dev/null
@@ -150,9 +174,9 @@ preflight)
   Q="SELECT CONCAT(s.table_name,'.',s.column_name,' ',s.column_type,' vs ',COALESCE(d.column_type,'MISSING')) FROM information_schema.columns s LEFT JOIN information_schema.columns d ON d.table_schema='$DEST' AND d.table_name=CONCAT('wp_',SUBSTRING(s.table_name,${#PFX}+1)) AND d.column_name=s.column_name WHERE s.table_schema='$S' AND s.table_name LIKE '${PFX}%' AND s.table_name<>'${PFX}dd_snapshot' AND NOT (d.column_type <=> s.column_type)"
   if [ -n "$HOSTED" ]; then DIFF=$(hwp db query --skip-column-names "\"$Q\""); else DIFF=$(sql -e "$Q"); fi
   [ -z "$DIFF" ] && echo "schema: source and destination columns identical" || { echo "SCHEMA MISMATCH:"; echo "$DIFF"; exit 1; }
-  run sync.php plan $SRCARGS --only=users --batch=500 >/dev/null && echo "identity + collision preflight OK" ;;
+  run sync.php plan $SYNCARGS --only=users --batch=500 >/dev/null && echo "identity + collision preflight OK" ;;
 plan)
-  run sync.php plan $SRCARGS; pull_reports ;;
+  run sync.php plan $SYNCARGS; pull_reports ;;
 apply|resume)
   [ "$CONFIRM" = "$DEST" ] || { echo "apply needs --confirm-dest=$DEST"; exit 2; }
   [ -n "$BACKUP" ] || { echo "apply needs --backup=<fresh dump of $DEST>"; exit 2; }
@@ -162,20 +186,21 @@ apply|resume)
     shasum -a 256 -c "$BACKUP.sha256" >/dev/null && [ $(( $(date +%s) - $(stat -f %m "$BACKUP") )) -lt 21600 ] || { echo "backup $BACKUP missing, unverified or older than 6h"; exit 3; }
   fi
   [ "$CMD" = resume ] && echo "resuming: completed batches are already equal and will be skipped"
-  run sync.php apply $SRCARGS
-  # Idempotent: restores the real legacy domain in any legacy-owned value still carrying DevKinsta's
-  # local host (0 changes once clean). Staff, settings and content are outside its scope.
-  run restore-legacy-domain.php apply --dest="$DEST"; pull_reports ;;
+  run sync.php apply $SYNCARGS
+  # Only for DevKinsta-derived sources (non-verbatim profiles): restores the real legacy domain in legacy-owned
+  # values. A verbatim production snapshot carries the real values already, so nothing is rewritten.
+  [ "$PROFILE" = verbatim ] || run restore-legacy-domain.php apply --dest="$DEST"; pull_reports ;;
 verify)
   if [ -n "$HOSTED" ]; then
     hwp "wc hpos sync --batch-size=500"; hwp "wc hpos verify_data --batch-size=1000 --order-types=shop_order,shop_order_refund" || true
-    ADMIN=$(hwp "user list --role=administrator --field=user_login --number=1"); hwp "wc tool run regenerate_product_lookup_tables --user=$ADMIN"; hwp "wc tool run clear_transients --user=$ADMIN"; hwp "cache flush"
+    # No product writes (scope 2026-10-19): no product lookup regeneration or term recount here.
+    ADMIN=$(hwp "user list --role=administrator --field=user_login --number=1"); hwp "wc tool run clear_transients --user=$ADMIN"; hwp "cache flush"
   else
     ./scripts/migration/postsync.sh "$DEST"
   fi
   run reconcile.php $SRCARGS
   run neutralize.php plan --dest="$DEST"
-  run sync.php plan $SRCARGS; pull_reports ;;
+  run sync.php plan $SYNCARGS; pull_reports ;;
 drop-source)
   [ -n "$HOSTED" ] && [ "$CONFIRM" = "$DEST" ] || { echo "drop-source is --hosted with --confirm-dest=<db>"; exit 2; }
   $SSH "cd '$R' && for t in \$(wp db query --skip-column-names \"SELECT table_name FROM information_schema.tables WHERE table_schema=DATABASE() AND table_name LIKE '${PFX}%'\"); do wp db query \"DROP TABLE \\\`\$t\\\`\"; done" ;;

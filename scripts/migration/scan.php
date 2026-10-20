@@ -36,6 +36,26 @@ function candidates(\mysqli $db, string $dest, TableRef|string $src): array
     return ['posts' => $posts, 'users' => $users];
 }
 
+/**
+ * Product guard shared by renumber.php and sync.php: destination products and variations are never
+ * relocated (scope 2026-10-19). Returns [id => [type, status, title, sku]] for every candidate post ID
+ * that is a product or variation on the destination.
+ */
+function product_candidates(\mysqli $db, string $dest, array $postIds): array
+{
+    if (!$postIds) {
+        return [];
+    }
+    $out = [];
+    foreach (array_chunk($postIds, 2000) as $ch) {
+        foreach (rows($db, "SELECT p.ID id, p.post_type t, p.post_status st, p.post_title title, (SELECT meta_value FROM " . t($dest, 'postmeta') . " WHERE post_id=p.ID AND meta_key='_sku' LIMIT 1) sku
+            FROM " . t($dest, 'posts') . " p WHERE p.ID IN (" . implode(',', array_map('intval', $ch)) . ") AND p.post_type IN ('product','product_variation')") as $r) {
+            $out[(int) $r['id']] = [$r['t'], $r['st'], $r['title'], (string) $r['sku']];
+        }
+    }
+    return $out;
+}
+
 /** A REGEXP prefilter that matches (at least) every decimal token in the given ID list. */
 function prefilter_regex(array $ids): string
 {

@@ -73,9 +73,29 @@ foreach (['product_categories', 'exclude_product_categories'] as $k) {
         }
     }
 }
-// Other coupon meta keys that look like product/category restrictions: listed for review, not parsed.
+// WebToffee Smart Coupons restrictions: serialized arrays keyed by product / category ID ({id: {min,max}}).
+foreach (['_wt_sc_coupon_products' => 'product', '_wt_sc_coupon_categories' => 'category'] as $k => $what) {
+    foreach (rows($db, "SELECT pm.meta_value v FROM {$S['postmeta']} pm JOIN {$S['posts']} p ON p.ID=pm.post_id AND p.post_type='shop_coupon' WHERE pm.meta_key='$k' AND pm.meta_value NOT IN ('','a:0:{}')") as $r) {
+        $v = @unserialize($r['v'], ['allowed_classes' => false]);
+        foreach (is_array($v) ? array_keys($v) : [] as $id) {
+            if ((int) $id > 0) {
+                if ($what === 'product') {
+                    $couponLists["coupon-$k"][(int) $id] = ($couponLists["coupon-$k"][(int) $id] ?? 0) + 1;
+                } else {
+                    $catRefs["coupon-$k"][(int) $id] = ($catRefs["coupon-$k"][(int) $id] ?? 0) + 1;
+                }
+            }
+        }
+    }
+}
+foreach (array_filter($couponLists, fn ($k) => str_starts_with($k, 'coupon-_wt'), ARRAY_FILTER_USE_KEY) as $kind => $ids) {
+    $add($kind, array_map(fn ($id, $n) => [$id, $n], array_keys($ids), $ids));
+}
+// Other coupon meta keys that look like product/category restrictions: listed for review, not parsed
+// (WebToffee *_condition keys are and/or operators, not references).
 $otherCouponKeys = rows($db, "SELECT pm.meta_key k, COUNT(*) n FROM {$S['postmeta']} pm JOIN {$S['posts']} p ON p.ID=pm.post_id AND p.post_type='shop_coupon'
     WHERE (pm.meta_key LIKE '%product%' OR pm.meta_key LIKE '%categor%') AND pm.meta_key NOT IN ('product_ids','exclude_product_ids','product_categories','exclude_product_categories')
+    AND pm.meta_key NOT IN ('_wt_sc_coupon_products','_wt_sc_coupon_categories','_wt_category_condition','_wt_product_condition','_wt_sc_bogo_product_condition','_wt_enable_product_category_restriction')
     AND pm.meta_value NOT IN ('','a:0:{}','0','no') GROUP BY pm.meta_key ORDER BY n DESC");
 // 4. Plugin rows and analytics that point at products
 $plugin = [

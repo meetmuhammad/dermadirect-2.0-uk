@@ -41,6 +41,15 @@ $check = function (string $name, bool $ok, $detail = null) use (&$res, &$fail) {
     out(($ok ? 'PASS ' : 'FAIL ') . $name . ($detail !== null ? '  ' . json_encode($detail) : ''));
 };
 $W = fn (string $t) => "`$work`.`$t`";
+// Legacy records the sync isolated (destination products hold their IDs; decision pending): excluded from the
+// parity scope below and reported as an unresolved check — never counted as passing.
+$isolated = [];
+if (!empty($a['isolated'])) {
+    foreach (array_slice(file($a['isolated'], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [], 1) as $line) {
+        $isolated[] = (int) explode(',', $line)[0];
+    }
+}
+$isoIn = $isolated ? implode(',', $isolated) : '0';
 $H = fn (string $expr) => "CAST(CONV(SUBSTRING(MD5($expr),1,15),16,10) AS DECIMAL(40))";
 $rowExpr = function (string $schema, string $table, string $alias, array $skip = []) use ($db): string {
     $cols = array_column(rows($db, 'SELECT column_name c FROM information_schema.columns WHERE table_schema=' . e($db, $schema) . ' AND table_name=' . e($db, $table) . ' ORDER BY ordinal_position'), 'c');
@@ -104,7 +113,7 @@ $res['staff_policy_users_not_migrated'] = count($staffPolicy);
 foreach (['orders' => "'shop_order','shop_order_refund'", 'coupons' => "'shop_coupon'"] as $entity => $types) {
     q($db, "DROP TABLE IF EXISTS {$W("scope_$entity")}");
     q($db, "CREATE TABLE {$W("scope_$entity")} (id BIGINT UNSIGNED PRIMARY KEY) ENGINE=InnoDB");
-    q($db, "INSERT INTO {$W("scope_$entity")} SELECT ID FROM {$S['posts']} WHERE post_type IN ($types)");
+    q($db, "INSERT INTO {$W("scope_$entity")} SELECT ID FROM {$S['posts']} WHERE post_type IN ($types) AND ID NOT IN ($isoIn)");
     $scope = $W("scope_$entity");
     $parts = [
         'post' => fn ($T, $schema, $tbl) => "SELECT p.ID, {$H($rowExpr($schema, $tbl, 'p'))}, 1 FROM {$T['posts']} p JOIN $scope s ON s.id=p.ID",
@@ -173,7 +182,8 @@ foreach ($keyed as $t => $pk) {
         $tbl[$t] = ['equal' => $q($S, $sx) === $q($D, $dx), 'source' => $q($S, $sx)];
         continue;
     }
-    $x = $build("k_src_$t", "SELECT x.`$pk`, $sx, 1 FROM {$S[$t]} x");
+    $hasOrder = (int) one($db, 'SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=' . e($db, $S->schema) . ' AND table_name=' . e($db, $S->name($t)) . " AND column_name='order_id'");
+    $x = $build("k_src_$t", "SELECT x.`$pk`, $sx, 1 FROM {$S[$t]} x" . ($hasOrder ? " WHERE x.order_id NOT IN ($isoIn)" : ''));
     $y = $build("k_dst_$t", "SELECT x.`$pk`, $dx, 1 FROM {$D[$t]} x");
     $tbl[$t] = ['source_rows' => (int) one($db, "SELECT COUNT(*) FROM $x"), 'missing' => (int) one($db, "SELECT COUNT(*) FROM $x a LEFT JOIN $y b ON b.id=a.id WHERE b.id IS NULL"),
         'differs' => (int) one($db, "SELECT COUNT(*) FROM $x a JOIN $y b ON b.id=a.id WHERE a.h<>b.h"), 'destination_only_rows' => (int) one($db, "SELECT COUNT(*) FROM $y b LEFT JOIN $x a ON a.id=b.id WHERE a.id IS NULL")];
@@ -278,8 +288,10 @@ foreach ($other as $o) {
     $fb = $flat($vb);
     $fd = $flat($vd);
     $paths = array_values(array_filter(array_unique(array_merge(array_keys($fb), array_keys($fd))), fn ($k) => ($fb[$k] ?? null) !== ($fd[$k] ?? null)));
-    // identical data, or only Freemius' per-plugin load timestamp (rewritten whenever a plugin loads)
-    if (!array_filter($paths, fn ($k) => !preg_match('/^plugin_data\.[^.]+\.last_load_timestamp$/', $k))) {
+    // identical data, or only Freemius runtime state rewritten whenever WordPress boots: per-plugin load
+    // timestamps and the install path (fs_accounts / fs_active_plugins; packaging deletes fs_active_plugins)
+    $fsRuntime = '/^(plugin_data\.[^.]+\.last_load_timestamp|plugins\..+\.timestamp|newest\.timestamp|abspath)$/';
+    if (in_array($o, ['fs_accounts', 'fs_active_plugins'], true) && !array_filter($paths, fn ($k) => !preg_match($fsRuntime, $k))) {
         $reser[] = $paths ? "$o (" . implode(', ', $paths) . ')' : $o;
         $other = array_values(array_diff($other, [$o]));
     }
@@ -293,6 +305,7 @@ $lookup = fn ($X, $schema, $t) => one($db, "SELECT CONCAT(COUNT(*),'|',COALESCE(
 $check('protected: product lookup tables identical', $lookup($B, $before, 'wp_wc_product_meta_lookup') === $lookup($D, $dest, 'wp_wc_product_meta_lookup')
     && $lookup($B, $before, 'wp_wc_product_attributes_lookup') === $lookup($D, $dest, 'wp_wc_product_attributes_lookup'), null);
 
+$check('no legacy record isolated (isolated records are unresolved, pending a decision)', !$isolated, ['isolated_legacy_ids' => $isolated]);
 $res['failed_checks'] = $fail;
 file_put_contents("$rep/parity-" . gmdate('Ymd\THis') . '.json', json_encode($res, JSON_PRETTY_PRINT));
 out($fail ? "PARITY FAILED: $fail check(s)" : 'PARITY OK');

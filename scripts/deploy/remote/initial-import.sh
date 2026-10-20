@@ -15,6 +15,15 @@ sh "$PKG/remote/remote-guard.sh" "$ROOT" "$URL" initial
 (cd "$PKG" && sha256sum -c SHA256SUMS >/dev/null) || { echo "package checksum mismatch"; exit 5; }
 [ -f web/app/mu-plugins/dd-migration-safety.php ] && grep -q woocommerce_superpayments_settings web/app/mu-plugins/dd-migration-safety.php || { echo "patched safety harness not deployed — run Action B first"; exit 6; }
 P=$(sed -n "s/^DB_PREFIX=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}$/\1/p" .env | tail -1); P=${P:-wp_}
+echo "== destination drift guard (content fingerprint must equal the baseline the package was built on)"
+[ -s "$PKG/destination-fingerprint.tsv" ] || { echo "package has no destination-fingerprint.tsv — refusing (nothing was changed)"; exit 12; }
+bash "$PKG/remote/dest-fingerprint.sh" "$ROOT" > "$PRIV/logs/fingerprint-$TS.tsv"
+if ! cmp -s "$PKG/destination-fingerprint.tsv" "$PRIV/logs/fingerprint-$TS.tsv"; then
+  echo "DESTINATION CHANGED since the baseline pull — refusing (nothing was changed). Changed tables:"
+  diff "$PKG/destination-fingerprint.tsv" "$PRIV/logs/fingerprint-$TS.tsv" | sed -n 's/^> /   /p' | cut -f1 | sort -u
+  exit 12
+fi
+echo "   unchanged since the pull ($(grep -vc excluded "$PKG/destination-fingerprint.tsv") tables/row sets compared)"
 DBN=$(wp db query --skip-column-names "SELECT DATABASE()")   # what WordPress actually uses (Kinsta SERVER_SECRET_*)
 mig() { MIG_HOSTED=1 MIG_BEDROCK_ROOT="$ROOT" MIG_REPORT_DIR="$PRIV/reports" php scripts/migration/"$@" --dest="$DBN" --confirm-dest="$DBN"; }
 echo "== hosted staff: save, then plan against the package by identity (before any change)"

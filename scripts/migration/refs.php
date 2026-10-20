@@ -122,6 +122,8 @@ function pattern_rules(): array
 {
     return [
         'query_id' => '/[?&](?:amp;|#038;)?(?:p|page_id|attachment_id|post)=([0-9]+)(?![0-9])/',
+        // a GUID whose whole path is the post ID (WordPress writes these for some menu items): https://host/123/
+        'path_id' => '#^https?://[^/?\#]+/([0-9]+)/?$#',
         'revision_name' => '/^([0-9]+)-(?:revision|autosave)-v[0-9]+$/',
         'whole' => '/^([0-9]+)$/',
         'wp_image' => '/\bwp-image-([0-9]+)(?![0-9])/',
