@@ -90,6 +90,9 @@ for needle in "localhost:808" "127.0.0.1:808" "httpsdermadirectcom.local" "/var/
   echo "SELECT * FROM ($Q) x WHERE n>0" | sql | awk -v n="$needle" '{print n "\t" $0}' >> "$OUT/residuals-reported.tsv"
 done
 sql -e "DROP TABLE IF EXISTS $X.dd_pkg_commerce, $X.dd_pkg_customers"
+echo "== renumber provenance holds in the package copy (every recorded key/FK cell still has its new ID)"
+PRC=0; $R renumber.php provenance --dest=$X --src=$LEG --src-prefix=lgcy_ > "$OUT/provenance-check.log" 2>&1 || PRC=$?
+grep -v Container "$OUT/provenance-check.log"; [ $PRC = 0 ] || { echo "PACKAGE REFUSED: renumber provenance check failed (rc $PRC)"; exit 1; }
 echo "== dump package database"
 docker exec "$C" sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --quick --hex-blob --default-character-set=utf8mb4 --skip-triggers "$1"' sh $X | gzip -6 > "$OUT/db.sql.gz"
 WANT=$(sql -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$X' AND table_type='BASE TABLE'")

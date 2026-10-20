@@ -4,6 +4,8 @@
  *   php renumber.php audit  --dest=dd_rh_dest --src=dd_rh_src   classify all hits, write reports, no writes
  *   php renumber.php apply  --dest=dd_rh_dest --src=dd_rh_src   one transaction; refuses if anything is unresolved
  *   php renumber.php verify --dest=dd_rh_dest --before=<db copy taken before apply>
+ *   php renumber.php provenance --dest=<db> --src=<src>   exact check of every recorded key/FK cell (valid after the sync)
+ *   php renumber.php residual --dest=<db> --src=<src>     PRE-SYNC: no reference to a moved record's old ID remains
  * Rerunnable: after a successful apply there are no candidates left, so apply is a no-op.
  * Plain PHP/SQL — WordPress is never bootstrapped.
  */
@@ -660,6 +662,26 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     if ((int) one($db, "SELECT GET_LOCK('dd_migration', 0)") !== 1) {
         fail('another migration run holds the dd_migration lock');
     }
+    if ($mode === 'provenance') {
+        // Exact, any time (also after the sync): every key/FK cell renumber recorded still exists by its recorded row key
+        // and still holds the recorded new ID. Fails if provenance is missing for a moved record.
+        $refs = rows($db, "SELECT tbl, col, pk, old_id, new_id FROM `$dest`.dd_mig_refs");
+        $noCell = fn (string $cond) => (int) one($db, "SELECT COUNT(*) FROM `$dest`.dd_mig_idmap i WHERE i.ns='posts' AND $cond AND NOT EXISTS (SELECT 1 FROM `$dest`.dd_mig_refs r WHERE r.ns='posts' AND r.tbl='wp_posts' AND r.col='ID' AND r.old_id=i.old_id AND r.new_id=i.new_id)");
+        $off = (int) cfg()['relocate_offset']['posts'];
+        $missing = $noCell("i.new_id <> i.old_id + $off");     // explicit identity corrections must carry provenance
+        $legacyOffset = $noCell("i.new_id = i.old_id + $off"); // offset relocations made before provenance recording existed
+        $bad = [];
+        foreach ($refs as $r) {
+            $where = implode(' AND ', array_map(function ($kv) use ($db) { [$k, $v] = explode('=', $kv, 2); return "`$k`=" . e($db, $v); }, explode(';', $r['pk'])));
+            if ((int) one($db, "SELECT COUNT(*) FROM `$dest`.`{$r['tbl']}` WHERE $where AND `{$r['col']}`=" . (int) $r['new_id']) !== 1) {
+                $bad[] = [$r['tbl'], $r['col'], $r['pk'], $r['old_id'], $r['new_id']];
+            }
+        }
+        write_csv(report_dir() . '/renumber-provenance-failures.csv', ['table', 'column', 'pk', 'old_id', 'new_id'], $bad);
+        out('provenance: ' . count($refs) . ' recorded cells, ' . count($bad) . ' not holding their recorded value; explicit corrections without a recorded ID cell: ' . $missing . '; earlier offset relocations without recorded cells (verified by mapping-aware verify only): ' . $legacyOffset
+            . ($bad || $missing ? ' (FAIL)' : ' (OK)'));
+        exit($bad || $missing ? 1 : 0);
+    }
     if ($mode === 'residual') {
         // Rescan for the OLD ids of everything that was moved: no FK/PK/reference-rule hit may remain.
         $old = [];
@@ -674,43 +696,10 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
         foreach (rows($db, "SELECT r.ns, r.tbl, r.col, r.pk, r.new_id FROM `$dest`.dd_mig_refs r JOIN `$dest`.dd_mig_idmap i ON i.ns=r.ns AND i.old_id=r.new_id") as $r) {
             $prov["{$r['ns']}|{$r['tbl']}|{$r['col']}|{$r['pk']}|{$r['new_id']}"] = true;
         }
-        // After the sync, a vacated old ID legitimately holds the imported LEGACY record: such a hit passes only when the
-        // whole referencing row is identical, column for column by primary key, to the source row (it is the legacy record).
-        $cols = [];
-        $legacyRow = function (string $table, array $pk) use ($db, $dest, $src, &$cols): bool {
-            if (!isset($cols[$table])) {
-                $have = (bool) one($db, 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=' . e($db, $src->schema) . ' AND table_name=' . e($db, $src->name($table)));
-                $cols[$table] = $have ? array_column(rows($db, 'SELECT d.column_name c FROM information_schema.columns d JOIN information_schema.columns s ON s.column_name=d.column_name AND s.table_schema='
-                    . e($db, $src->schema) . ' AND s.table_name=' . e($db, $src->name($table)) . ' WHERE d.table_schema=' . e($db, $dest) . ' AND d.table_name=' . e($db, $table)), 'c') : [];
-            }
-            if (!$cols[$table]) {
-                return false;
-            }
-            $where = implode(' AND ', array_map(fn ($k, $v) => "d.`$k`=" . e($db, $v), array_keys($pk), $pk));
-            $same = implode(' AND ', array_map(fn ($c) => "d.`$c` <=> s.`$c`", $cols[$table]));
-            $on = implode(' AND ', array_map(fn ($k) => "s.`$k`=d.`$k`", array_keys($pk)));
-            return (int) one($db, "SELECT COUNT(*) FROM `$dest`.`$table` d JOIN {$src[$table]} s ON $on WHERE $where AND $same") === 1;
-        };
-        $res = ['provenance' => 0, 'legacy_identical' => 0];
-        $bad = array_filter($hits, function ($h) use ($prov, $legacyRow, &$res) {
-            if (in_array($h[5], ['rewrite', 'unresolved'], true)) {
-                return true;
-            }
-            if (!in_array($h[5], ['entity', 'fk'], true)) {
-                return false;
-            }
-            $pk = json_decode($h[3], true);
-            if (isset($prov["$h[0]|$h[1]|$h[2]|" . pk_canon($pk) . "|$h[4]"])) {
-                $res['provenance']++;
-                return false;
-            }
-            if ($legacyRow($h[1], $pk)) {
-                $res['legacy_identical']++;
-                return false;
-            }
-            return true;
-        });
-        out('residual entity/fk hits accepted: ' . json_encode($res));
+        // Residual is a PRE-SYNC check: after the sync, vacated IDs hold imported legacy graphs (with regenerated meta IDs),
+        // which parity verifies semantically; destination references are then checked exactly by `provenance`.
+        $bad = array_filter($hits, fn ($h) => in_array($h[5], ['rewrite', 'unresolved'], true)
+            || (in_array($h[5], ['entity', 'fk'], true) && !isset($prov["$h[0]|$h[1]|$h[2]|" . pk_canon(json_decode($h[3], true)) . "|$h[4]"])));
         write_csv(report_dir() . '/renumber-residual.csv', ['ns', 'table', 'column', 'pk', 'id', 'class', 'reason', 'key'], $hits);
         $by = array_count_values(array_column($hits, 5));
         out('residual hits by class: ' . json_encode($by) . ' — ' . ($bad ? count($bad) . ' REMAINING REFERENCES (FAIL)' : 'no remaining references (OK)'));

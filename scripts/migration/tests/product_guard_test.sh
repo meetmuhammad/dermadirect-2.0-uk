@@ -75,15 +75,25 @@ sql -e "INSERT INTO $G.wp_posts (ID,post_author,post_date,post_date_gmt,post_con
 $R renumber.php residual --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-11.log 2>&1; rc=$?
 t "residual FAILS on a stale post_parent to the reused ID (not written by renumber)" "[ $rc != 0 ] && grep -q 'REMAINING REFERENCES (FAIL)' migration-reports/tmp-guard-11.log"
 sql -e "DELETE FROM $G.wp_posts WHERE ID=1001"
-# after the sync, the vacated old product ID holds the imported LEGACY order: accepted only if identical to the source row
-MID=$(sql -e "SELECT MIN(meta_id) FROM $SRC.lgcy_postmeta WHERE post_id=$PROD")
-sql -e "INSERT INTO $G.wp_posts SELECT * FROM $SRC.lgcy_posts WHERE ID=$PROD; INSERT INTO $G.wp_postmeta SELECT * FROM $SRC.lgcy_postmeta WHERE meta_id=$MID"
-$R renumber.php residual --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-12.log 2>&1; rc=$?
-t "residual passes when the vacated ID holds the identical legacy record (post + meta)" "[ $rc = 0 ] && grep -q '\"legacy_identical\":2' migration-reports/tmp-guard-12.log"
-sql -e "UPDATE $G.wp_postmeta SET meta_value=CONCAT(meta_value,'x') WHERE meta_id=$MID"
-$R renumber.php residual --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-13.log 2>&1; rc=$?
-t "residual FAILS when that row differs from the source in any column" "[ $rc != 0 ] && grep -q 'REMAINING REFERENCES (FAIL)' migration-reports/tmp-guard-13.log"
-sql -e "DELETE FROM $G.wp_postmeta WHERE meta_id=$MID; DELETE FROM $G.wp_posts WHERE ID=$PROD"
+# provenance (exact, valid after the sync too): every recorded cell holds its recorded new ID
+$R renumber.php provenance --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-12.log 2>&1; rc=$?
+t "provenance passes: every recorded cell holds its new ID" "[ $rc = 0 ] && grep -q '(OK)' migration-reports/tmp-guard-12.log"
+# the sync re-imports the legacy order at the vacated ID with REGENERATED meta IDs and the same values:
+# provenance is unaffected, and residual (a pre-sync check) refuses rather than accepting it by ID
+sql -e "INSERT INTO $G.wp_posts SELECT * FROM $SRC.lgcy_posts WHERE ID=$PROD; INSERT INTO $G.wp_postmeta (post_id,meta_key,meta_value) SELECT post_id,meta_key,meta_value FROM $SRC.lgcy_postmeta WHERE post_id=$PROD"
+$R renumber.php provenance --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-13.log 2>&1; rc=$?
+t "provenance still passes with a legacy graph (regenerated meta IDs) at the vacated ID" "[ $rc = 0 ] && grep -q '(OK)' migration-reports/tmp-guard-13.log"
+$R renumber.php residual --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-14.log 2>&1; rc=$?
+t "residual refuses after the sync (never accepts a legacy record by ID/key equality)" "[ $rc != 0 ] && grep -q 'REMAINING REFERENCES (FAIL)' migration-reports/tmp-guard-14.log"
+sql -e "DELETE FROM $G.wp_postmeta WHERE post_id=$PROD; DELETE FROM $G.wp_posts WHERE ID=$PROD"
+# a recorded cell reverted to the old ID (stale reference) or changed only in letter case is caught
+sql -e "UPDATE $G.wp_stock_log SET product_id=$PROD WHERE product_id=$LEG"
+$R renumber.php provenance --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-15.log 2>&1; rc=$?
+t "provenance FAILS when a recorded reference no longer holds its new ID" "[ $rc != 0 ] && grep -q '(FAIL)' migration-reports/tmp-guard-15.log"
+sql -e "UPDATE $G.wp_stock_log SET product_id=$LEG WHERE product_id=$PROD"
+# case-only differences: the comparisons used for protection must be byte-exact (MariaDB's default collation is not)
+t "case-only change is a difference for the hashed comparison parity uses" "[ \"\$(sql -e \"SELECT MD5(CONCAT('_sku',0x1F,COALESCE(HEX('Abc'),'~'))) = MD5(CONCAT('_sku',0x1F,COALESCE(HEX('abc'),'~'))), 'Abc' = 'abc'\")\" = '0	1' ]"
+t "NULL and empty value differ for that comparison" "[ \"\$(sql -e \"SELECT MD5(CONCAT('k',0x1F,COALESCE(HEX(NULL),'~'))) = MD5(CONCAT('k',0x1F,COALESCE(HEX(''),'~')))\")\" = 0 ]"
 
 [ "${KEEP:-}" ] || { sql -e "DROP DATABASE $G"; rm -f migration-reports/tmp-guard-*.log; }
 [ $fails = 0 ] && echo "ALL PASSED" || { echo "$fails FAILED"; exit 1; }
