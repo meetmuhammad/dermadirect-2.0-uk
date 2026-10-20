@@ -84,7 +84,10 @@ for needle in "localhost:808" "127.0.0.1:808" "httpsdermadirectcom.local" "/var/
   n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_comments WHERE comment_post_ID IN ($COMMERCE) AND ($(txtcols wp_comments "$needle"))")))
   n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_users WHERE ID IN ($CUSTOMERS) AND ($(txtcols wp_users "$needle"))")))
   n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.wp_usermeta WHERE user_id IN ($CUSTOMERS) AND meta_value LIKE '%$needle%'")))
-  for t in $KEYED; do c=$(txtcols $t "$needle"); [ -n "$c" ] && [ "$c" != NULL ] && n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.\`$t\` WHERE $c"))); done
+  # wp_wt_sc_coupon_lookup holds destination-only coupons' rows too (e.g. coupon 628238, unchanged from the baseline):
+  # strict only for rows of legacy-owned coupons; every other keyed table is checked whole (unchanged)
+  for t in $KEYED; do c=$(txtcols $t "$needle"); own=TRUE; [ "$t" = wp_wt_sc_coupon_lookup ] && own="x.coupon_id IN ($COMMERCE)"
+    [ -n "$c" ] && [ "$c" != NULL ] && n=$((n + $(sql -e "SELECT COUNT(*) FROM $X.\`$t\` x WHERE ($c) AND $own"))); done
   if [ "$n" -gt 0 ]; then echo "   STRICT RESIDUAL '$needle' in legacy-owned records: $n"; echo "$needle $n" >> "$OUT/residuals.txt"; else echo "   strict none: $needle"; fi
   Q=$(sql -e "SELECT GROUP_CONCAT(CONCAT('SELECT ''',table_name,'.',column_name,''' c, COUNT(*) n FROM \`$X\`.\`',table_name,'\` WHERE \`',column_name,'\` LIKE ''%$needle%''') SEPARATOR ' UNION ALL ') FROM information_schema.columns WHERE table_schema='$X' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext') AND table_name LIKE 'wp\\_%'")
   echo "SELECT * FROM ($Q) x WHERE n>0" | sql | awk -v n="$needle" '{print n "\t" $0}' >> "$OUT/residuals-reported.tsv"
