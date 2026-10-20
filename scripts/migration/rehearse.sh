@@ -10,7 +10,7 @@ DUMP=$1; SRC=${2:-dd_rh_src}; DEST=${3:-dd_rh_dest}
 R=./scripts/migration/run.sh
 LOG=migration-reports/rehearse-$(date -u +%Y%m%dT%H%M%S).log
 T=migration-reports/rehearse-timings.tsv
-step() { name=$1; shift; s=$(date +%s); echo "== $name" | tee -a "$LOG"; "$@" >>"$LOG" 2>&1 || { echo "FAILED: $name (see $LOG)"; exit 1; }; d=$(( $(date +%s)-s )); printf '%s\t%s\n' "$name" "$d" >> "$T"; echo "   ${d}s" | tee -a "$LOG"; }
+step() { name=$1; shift; s=$(date +%s); echo "== $name" | tee -a "$LOG"; "$@" >>"$LOG" 2>&1 || { rc=$?; printf '%s\t%s\trc=%s\n' "$name" "$(( $(date +%s)-s ))" "$rc" >> "$T"; echo "FAILED: $name rc=$rc (see $LOG)"; exit $rc; }; d=$(( $(date +%s)-s )); printf '%s\t%s\n' "$name" "$d" >> "$T"; echo "   ${d}s" | tee -a "$LOG"; }
 : > "$T"
 docker compose stop web >/dev/null 2>&1 || true
 step "restore destination from pre-renumber backup" ./scripts/migration/snapshot.sh restore "$DUMP" "$DEST"

@@ -33,5 +33,12 @@ check('group role alone (no base customer role) follows the staff policy', !$isC
 check('"customer-service" staff role is not mistaken for customer', !$isC(['customer-service']));
 check('empty capabilities are not a customer', !\DDMig\is_customer_caps(serialize([])) && !\DDMig\is_customer_caps(null));
 check('a role granted false does not count', $isC(['customer']) && \DDMig\is_customer_caps(serialize(['customer' => true, 'administrator' => false])));
+// CHECKSUM TABLE answers: NULL (missing/unreadable table), empty, non-numeric or missing rows never compare
+$ce = fn (array $rows, int $n = 1) => \DDMig\checksum_error($rows, $n);
+check('numeric checksum accepted', $ce([['Table' => 'db.wp_posts', 'Checksum' => '123']]) === null);
+check('NULL checksum refused', $ce([['Table' => 'db.wp_posts', 'Checksum' => null]]) !== null);
+check('empty checksum refused', $ce([['Table' => 'db.wp_posts', 'Checksum' => '']]) !== null);
+check('non-numeric checksum refused', $ce([['Table' => 'db.wp_posts', 'Checksum' => '12ab']]) !== null);
+check('missing row refused', $ce([['Table' => 'a.x', 'Checksum' => '1']], 2) !== null);
 echo $fails ? "\n$fails FAILED\n" : "\nALL PASSED\n";
 exit($fails ? 1 : 0);

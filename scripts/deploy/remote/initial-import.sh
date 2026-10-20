@@ -18,6 +18,8 @@ P=$(sed -n "s/^DB_PREFIX=['\"]\{0,1\}\([^'\"]*\)['\"]\{0,1\}$/\1/p" .env | tail 
 echo "== destination drift guard (content fingerprint must equal the baseline the package was built on)"
 [ -s "$PKG/destination-fingerprint.tsv" ] || { echo "package has no destination-fingerprint.tsv — refusing (nothing was changed)"; exit 12; }
 bash "$PKG/remote/dest-fingerprint.sh" "$ROOT" > "$PRIV/logs/fingerprint-$TS.tsv"
+bash "$PKG/remote/dest-fingerprint.sh" --validate "$PKG/destination-fingerprint.tsv" "$PRIV/logs/fingerprint-$TS.tsv" \
+  || { echo "fingerprint has NULL/non-numeric or missing values — refusing (nothing was changed)"; exit 12; }
 if ! cmp -s "$PKG/destination-fingerprint.tsv" "$PRIV/logs/fingerprint-$TS.tsv"; then
   echo "DESTINATION CHANGED since the baseline pull — refusing (nothing was changed). Changed tables:"
   diff "$PKG/destination-fingerprint.tsv" "$PRIV/logs/fingerprint-$TS.tsv" | sed -n 's/^> /   /p' | cut -f1 | sort -u

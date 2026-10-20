@@ -30,6 +30,12 @@ const OTHER_NS_COLUMNS = [
     'wp_wdr_order_item_discounts.order_item_id', 'wp_comments.comment_ID', 'wp_automatewoo_log_meta.log_id', 'wp_gens_rafmeta.gens_raf_id',
     'wp_wpmailsmtp_email_tracking_links.email_log_id', // FK to wp_wpmailsmtp_emails_log.id
 ];
+/** Integer columns holding a product/variation post ID outside the core FK set (moved only with --product-map). */
+const PRODUCT_FK_COLUMNS = [
+    'wp_wc_product_meta_lookup.product_id', 'wp_wc_product_attributes_lookup.product_id', 'wp_wc_product_attributes_lookup.product_or_parent_id',
+    'wp_wc_order_product_lookup.product_id', 'wp_wc_order_product_lookup.variation_id', 'wp_wc_mnm_child_items.product_id', 'wp_wc_mnm_child_items.container_id',
+    'wp_wc_reserved_stock.product_id', 'wp_wc_product_download_directories.product_id', 'wp_stock_log.product_id',
+];
 
 /**
  * Text rules for destination-owned rows. Keyed "table.column|context"; context is meta_key,
@@ -151,6 +157,9 @@ final class Classifier
             if (($ns === 'posts' && $tc === 'wp_posts.ID') || ($ns === 'users' && $tc === 'wp_users.ID')) {
                 return ['entity', 'pk', null, 'the moved record itself'];
             }
+            if ($ns === 'posts' && in_array($tc, PRODUCT_FK_COLUMNS, true)) {
+                return ['fk', 'int', null, 'product ID column'];
+            }
             if (in_array($tc, FK_COLUMNS[$ns], true)) {
                 if ($tc === 'wp_term_relationships.object_id') {
                     return ['fk', 'int', null, 'term relationship of moved post'];
@@ -187,6 +196,9 @@ final class Classifier
             return ['legacy', null, null, 'customer user meta (legacy-owned, replaced by the sync)'];
         }
         $key = $ctx['meta_key'] ?? $ctx['option_name'] ?? $ctx['post_type'] ?? '';
+        if ($table === 'wp_options' && preg_match('/^_(site_)?transient_/', $key)) {
+            return ['derived', 'transient', null, 'transient cache naming/holding a moved ID; deleted (with its timeout) so WordPress rebuilds it'];
+        }
         $rules = text_rules()[$ns];
         $rule = $rules["$tc|$key"] ?? $rules["$tc|*"] ?? null;
         if ($rule === null && $table === 'wp_postmeta' && $ownerPost) {
@@ -247,10 +259,18 @@ final class Classifier
                 }
                 return rewrite_serialized($value, $map, ['@values']);
             case 'derived':
+            case 'transient':
                 return ['value' => '', 'unresolved' => []];
         }
         return ['value' => $value, 'unresolved' => ["unknown handler $handler"]];
     }
+}
+
+/** Explicit post targets (--product-map: destination product -> verified legacy product ID); others use the offset. */
+function product_map(?array $set = null): array
+{
+    static $m = [];
+    return $set === null ? $m : $m = $set;
 }
 
 function build_map(array $cands): array
@@ -258,7 +278,7 @@ function build_map(array $cands): array
     $m = [];
     foreach ($cands as $ns => $ids) {
         foreach ($ids as $id) {
-            $m[$ns][$id] = $id + (int) cfg()['relocate_offset'][$ns];
+            $m[$ns][$id] = ($ns === 'posts' ? product_map()[$id] ?? null : null) ?? $id + (int) cfg()['relocate_offset'][$ns];
         }
     }
     return $m;
@@ -332,11 +352,13 @@ function preflight_renumber(\mysqli $db, string $dest, TableRef $src, array $map
 {
     $c = cfg();
     foreach (['posts' => 'posts', 'users' => 'users'] as $ns => $tbl) {
-        if (empty($maps[$ns])) {
+        // explicit product targets sit inside legacy space by design; they are checked by check_product_map()
+        $band = $ns === 'posts' ? array_diff_key($maps[$ns] ?? [], product_map()) : ($maps[$ns] ?? []);
+        if (!$band) {
             continue;
         }
-        $lo = min($maps[$ns]);
-        $hi = max($maps[$ns]);
+        $lo = min($band);
+        $hi = max($band);
         $future = (int) $c['future_start']['wp_' . $tbl];
         $maxSrc = (int) one($db, "SELECT MAX(ID) FROM {$src[$tbl]}");
         $margin = max((int) ceil($maxSrc * $c['headroom_margin_ratio']), (int) $c['headroom_margin_min']);
@@ -376,15 +398,26 @@ function apply(\mysqli $db, string $dest, TableRef $src, string $run, array $can
                 $vals = [];
                 foreach ($chunk as $old => $new) {
                     $kind = $ns === 'posts' ? (string) one($db, "SELECT post_type FROM $P WHERE ID=$old") : 'user';
-                    $vals[] = '(' . e($db, $ns) . ",$old,$new," . e($db, $kind) . ',' . e($db, "destination-owned record inside legacy ID space (run $run)") . ', UTC_TIMESTAMP())';
+                    $vals[] = '(' . e($db, $ns) . ",$old,$new," . e($db, $kind) . ',' . e($db, isset(product_map()[$old]) ? "destination product moved to its verified legacy product ID (--product-map, run $run)" : "destination-owned record inside legacy ID space (run $run)") . ', UTC_TIMESTAMP())';
                 }
                 q($db, "INSERT INTO `$dest`.dd_mig_idmap (ns, old_id, new_id, kind, reason, created_at) VALUES " . implode(',', $vals));
             }
         }
         // 1) value rewrites, addressed by the row's current (old) primary key, optimistic on old value
         $n = 0;
-        foreach ($rewrites as [$table, $col, $pk, $old, $new]) {
+        foreach ($rewrites as [$table, $col, $pk, $old, $new, $handler]) {
             $where = implode(' AND ', array_map(fn ($k, $v) => "`$k`=" . e($db, $v), array_keys($pk), $pk));
+            if ($handler === 'transient') {
+                $name = (string) one($db, "SELECT option_name FROM `$dest`.`$table` WHERE $where");
+                q($db, "DELETE FROM `$dest`.`$table` WHERE $where AND `$col`=" . e($db, $old));
+                $ok = $db->affected_rows === 1;
+                q($db, "DELETE FROM `$dest`.`$table` WHERE option_name=" . e($db, preg_replace('/^_(site_)?transient_/', '_$1transient_timeout_', $name)));
+                if (!$ok) {
+                    throw new \RuntimeException("delete of transient $name affected no row");
+                }
+                $n++;
+                continue;
+            }
             q($db, "UPDATE `$dest`.`$table` SET `$col`=" . e($db, $new) . " WHERE $where AND `$col`=" . e($db, $old));
             if ($db->affected_rows !== 1) {
                 throw new \RuntimeException("rewrite of $table.$col " . json_encode($pk) . ' affected ' . $db->affected_rows . ' rows');
@@ -402,20 +435,20 @@ function apply(\mysqli $db, string $dest, TableRef $src, string $run, array $can
             }
         }
         $M = 'dd_mig_cur_map';
-        $fk = [
-            "UPDATE $P x JOIN $M m ON m.ns='posts' AND m.old_id=x.post_parent SET x.post_parent=m.new_id",
-            "UPDATE $PM x JOIN $M m ON m.ns='posts' AND m.old_id=x.post_id SET x.post_id=m.new_id",
-            'UPDATE ' . t($dest, 'term_relationships') . " x JOIN $M m ON m.ns='posts' AND m.old_id=x.object_id SET x.object_id=m.new_id",
-            'UPDATE ' . t($dest, 'comments') . " x JOIN $M m ON m.ns='posts' AND m.old_id=x.comment_post_ID SET x.comment_post_ID=m.new_id",
-            "UPDATE $P x JOIN $M m ON m.ns='posts' AND m.old_id=x.ID SET x.ID=m.new_id",
-            "UPDATE $UM x JOIN $M m ON m.ns='users' AND m.old_id=x.user_id SET x.user_id=m.new_id",
-            "UPDATE $P x JOIN $M m ON m.ns='users' AND m.old_id=x.post_author SET x.post_author=m.new_id",
-            'UPDATE ' . t($dest, 'comments') . " x JOIN $M m ON m.ns='users' AND m.old_id=x.user_id SET x.user_id=m.new_id",
-            "UPDATE $U x JOIN $M m ON m.ns='users' AND m.old_id=x.ID SET x.ID=m.new_id",
-        ];
+        // [table, column, namespace] in update order (FKs before the primary keys they point at)
+        $cols = [['wp_posts', 'post_parent', 'posts'], ['wp_postmeta', 'post_id', 'posts'], ['wp_term_relationships', 'object_id', 'posts'],
+            ['wp_comments', 'comment_post_ID', 'posts'], ['wp_posts', 'ID', 'posts'], ['wp_usermeta', 'user_id', 'users'],
+            ['wp_posts', 'post_author', 'users'], ['wp_comments', 'user_id', 'users'], ['wp_users', 'ID', 'users']];
+        foreach (product_map() ? PRODUCT_FK_COLUMNS : [] as $tc) {
+            [$tb, $col] = explode('.', $tc);
+            if (one($db, 'SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=' . e($db, $dest) . ' AND table_name=' . e($db, $tb) . ' AND column_name=' . e($db, $col))) {
+                $cols[] = [$tb, $col, 'posts'];
+            }
+        }
+        record_refs($db, $dest, $run, $cols, $maps);
         $fkCounts = [];
-        foreach ($fk as $sql) {
-            q($db, $sql);
+        foreach ($cols as [$tb, $col, $ns]) {
+            q($db, "UPDATE `$dest`.`$tb` x JOIN $M m ON m.ns='$ns' AND m.old_id=x.`$col` SET x.`$col`=m.new_id");
             $fkCounts[] = $db->affected_rows;
         }
         q($db, "INSERT INTO `$dest`.dd_mig_ledger (run_id, entity, entity_id, action, note) VALUES (" . e($db, $run) . ", 'renumber', 0, 'apply', " . e($db, json_encode(['value_rewrites' => $n, 'fk_rows' => $fkCounts])) . ')');
@@ -425,6 +458,42 @@ function apply(\mysqli $db, string $dest, TableRef $src, string $run, array $can
         fail('renumber rolled back: ' . $t->getMessage());
     }
     return $summary + ['applied' => true, 'value_rewrites' => $n, 'fk_rows' => $fkCounts];
+}
+
+/** Canonical primary-key string of a row (key order and int/string typing do not matter). */
+function pk_canon(array $pk): string
+{
+    ksort($pk);
+    return implode(';', array_map(fn ($k, $v) => "$k=$v", array_keys($pk), $pk));
+}
+
+/**
+ * Records, before the set-based updates, every key/FK cell this run rewrites: table, column, the row's primary key
+ * AFTER the run (moved key columns mapped), old and new ID. Reversible record and the residual check's provenance.
+ */
+function record_refs(\mysqli $db, string $dest, string $run, array $cols, array $maps): void
+{
+    $moved = [];
+    foreach ($cols as [$tb, $col, $ns]) {
+        $moved[$tb][$col] = $ns;
+    }
+    foreach ($cols as [$tb, $col, $ns]) {
+        $pkc = pk($db, $dest, $tb) ?: fail("$tb has no primary key; cannot record provenance");
+        $sel = implode(',', array_map(fn ($c) => "x.`$c`", $pkc));
+        $vals = [];
+        $res = q($db, "SELECT $sel, x.`$col` AS __old, m.new_id AS __new FROM `$dest`.`$tb` x JOIN dd_mig_cur_map m ON m.ns='$ns' AND m.old_id=x.`$col`");
+        while ($r = $res->fetch_assoc()) {
+            $pk = [];
+            foreach ($pkc as $c) {
+                $n = $moved[$tb][$c] ?? null;
+                $pk[$c] = $n !== null && isset($maps[$n][(int) $r[$c]]) ? (string) $maps[$n][(int) $r[$c]] : (string) $r[$c];
+            }
+            $vals[] = '(' . implode(',', [e($db, $run), e($db, $ns), e($db, $tb), e($db, $col), e($db, pk_canon($pk)), (int) $r['__old'], (int) $r['__new']]) . ')';
+        }
+        foreach (array_chunk($vals, 1000) as $ch) {
+            q($db, "INSERT INTO `$dest`.dd_mig_refs (run_id, ns, tbl, col, pk, old_id, new_id) VALUES " . implode(',', $ch));
+        }
+    }
 }
 
 /**
@@ -441,6 +510,7 @@ function verify(\mysqli $db, string $dest, string $before): array
     $tables = ['posts' => 'ID', 'postmeta' => 'meta_id', 'options' => 'option_id', 'term_relationships' => null, 'termmeta' => 'meta_id',
         'terms' => 'term_id', 'term_taxonomy' => 'term_taxonomy_id', 'usermeta' => 'umeta_id', 'users' => 'ID', 'comments' => 'comment_ID'];
     $res = [];
+    $changes = []; // every row that differs only by mapped IDs: the explicit list of mapping changes
     foreach ($tables as $tb => $pk) {
         $B = t($before, $tb);
         $A = t($dest, $tb);
@@ -463,12 +533,17 @@ function verify(\mysqli $db, string $dest, string $before): array
         $samples = [];
         $r = q($db, "SELECT $sel FROM $B b $join WHERE a.`$pk` IS NULL OR $diffCond");
         while ($row = $r->fetch_assoc()) {
-            $ok = $row["a_$pk"] !== null;
-            foreach ($cols as $c) {
+            // transient caches naming a moved ID are deleted by apply (WordPress rebuilds them)
+            $ok = $row["a_$pk"] !== null || ($tb === 'options' && preg_match('/^_(site_)?transient_/', (string) $row['b_option_name']));
+            foreach ($row["a_$pk"] === null ? [] : $cols as $c) {
                 if ($ok && $row["b_$c"] !== $row["a_$c"] && !equivalent_under_map((string) $row["b_$c"], (string) $row["a_$c"], $all)) {
                     // Derived caches are allowed to be emptied.
                     $ok = ($tb === 'options' && $c === 'option_value' && ($row['b_option_name'] ?? '') === 'rewrite_rules' && $row["a_$c"] === '');
                 }
+            }
+            if ($ok) {
+                $diff = array_values(array_filter($cols, fn ($c) => $row["a_$pk"] !== null && $row["b_$c"] !== $row["a_$c"]));
+                $changes[] = [$tb, $row["b_$pk"], $row["a_$pk"] ?? '(deleted)', implode('+', $diff ?: ['row']), $row['b_post_type'] ?? $row['b_meta_key'] ?? $row['b_option_name'] ?? '', $row['b_post_id'] ?? ''];
             }
             $ok ? $changed++ : $bad++;
             if (!$ok && count($samples) < 10) {
@@ -477,6 +552,7 @@ function verify(\mysqli $db, string $dest, string $before): array
         }
         $res[$tb] = ['rows' => $cnt, 'changed_only_by_mapping' => $changed, 'mismatched' => $bad, 'samples' => $samples];
     }
+    write_csv(report_dir() . '/renumber-verify-changes.csv', ['table', 'pk_before', 'pk_after', 'changed_columns', 'type_or_key', 'post_id_before'], $changes);
     return $res;
 }
 
@@ -518,6 +594,42 @@ function renumber_files(\mysqli $db, string $dest, string $uploads, bool $apply)
     return $res;
 }
 
+/**
+ * --product-map=<csv destination_id,legacy_id>: an approved, explicit identity correction (2026-10-20) for destination
+ * products that occupy legacy order IDs. Every row must prove identity and a free target, or nothing runs:
+ * destination row is a product candidate; the legacy row at the target is a product of the same type with the same
+ * SKU and title; the legacy row at the destination ID is not a product; the target is unused in the destination.
+ */
+function check_product_map(\mysqli $db, string $dest, TableRef $src, string $file, array $prod): array
+{
+    $pm = [];
+    foreach (array_slice(array_map('str_getcsv', file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES)), 1) as $r) {
+        [$from, $to] = [(int) $r[0], (int) $r[1]];
+        $err = fn ($m) => fail("--product-map $from -> $to: $m");
+        if ((int) one($db, "SELECT COUNT(*) FROM `$dest`.dd_mig_idmap WHERE ns='posts' AND old_id=$from AND new_id=$to")) {
+            continue; // already applied by an earlier run (rerun is a no-op)
+        }
+        isset($prod[$from]) || $err('not a destination product candidate');
+        (!isset($pm[$from]) && !in_array($to, $pm, true)) || $err('duplicate row or target');
+        $l = rows($db, "SELECT post_type, post_title, (SELECT meta_value FROM {$src['postmeta']} WHERE post_id=$to AND meta_key='_sku' LIMIT 1) sku FROM {$src['posts']} WHERE ID=$to")[0] ?? $err('no legacy record at target');
+        [$type, , $title, $sku] = $prod[$from];
+        ($l['post_type'] === $type && $l['post_title'] === $title && (string) $l['sku'] === $sku && $sku !== '') || $err('legacy type/title/SKU does not match');
+        in_array((string) one($db, "SELECT post_type FROM {$src['posts']} WHERE ID=$from"), ['product', 'product_variation'], true) && $err('legacy record at the destination ID is a product');
+        // (legacy order lines that already name the legacy product ID, e.g. order_product_lookup.product_id, are the
+        // references this correction repairs, so they are not "in use")
+        foreach ([['posts', 'ID'], ['posts', 'post_parent'], ['postmeta', 'post_id'], ['term_relationships', 'object_id'], ['comments', 'comment_post_ID'],
+            ['wc_orders', 'id'], ['wc_orders', 'parent_order_id'], ['wc_product_meta_lookup', 'product_id'], ['wc_product_attributes_lookup', 'product_id'],
+            ['wc_product_attributes_lookup', 'product_or_parent_id'], ['stock_log', 'product_id'], ['wc_reserved_stock', 'product_id']] as [$tb, $col]) {
+            if (one($db, 'SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=' . e($db, $dest) . ' AND table_name=' . e($db, cfg()['prefix'] . $tb) . ' AND column_name=' . e($db, $col))) {
+                (int) one($db, 'SELECT COUNT(*) FROM ' . t($dest, $tb) . " WHERE `$col`=$to") && $err("target in use in $tb.$col");
+            }
+        }
+        (int) one($db, "SELECT COUNT(*) FROM `$dest`.dd_mig_idmap WHERE ns='posts' AND new_id=$to") && $err('target already used by an earlier mapping');
+        $pm[$from] = $to;
+    }
+    return $pm;
+}
+
 if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     $a = args($argv);
     $mode = $a['_'][0] ?? fail('mode required: audit|apply|verify');
@@ -555,7 +667,50 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
             $old[$r['ns']][] = (int) $r['old_id'];
         }
         [$hits, , $unresolved] = audit($db, $dest, $src, $old);
-        $bad = array_filter($hits, fn ($h) => in_array($h[5], ['entity', 'fk', 'rewrite', 'unresolved'], true));
+        // An old ID that a later mapping legitimately re-occupies (e.g. a vacated attachment ID that is the verified
+        // legacy ID of a moved product): its own row and FK rows belong to the new holder; value references still fail.
+        // Accepted only when that exact cell (table, column, row key, ID) was written by renumber itself (dd_mig_refs).
+        $prov = [];
+        foreach (rows($db, "SELECT r.ns, r.tbl, r.col, r.pk, r.new_id FROM `$dest`.dd_mig_refs r JOIN `$dest`.dd_mig_idmap i ON i.ns=r.ns AND i.old_id=r.new_id") as $r) {
+            $prov["{$r['ns']}|{$r['tbl']}|{$r['col']}|{$r['pk']}|{$r['new_id']}"] = true;
+        }
+        // After the sync, a vacated old ID legitimately holds the imported LEGACY record: such a hit passes only when the
+        // whole referencing row is identical, column for column by primary key, to the source row (it is the legacy record).
+        $cols = [];
+        $legacyRow = function (string $table, array $pk) use ($db, $dest, $src, &$cols): bool {
+            if (!isset($cols[$table])) {
+                $have = (bool) one($db, 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=' . e($db, $src->schema) . ' AND table_name=' . e($db, $src->name($table)));
+                $cols[$table] = $have ? array_column(rows($db, 'SELECT d.column_name c FROM information_schema.columns d JOIN information_schema.columns s ON s.column_name=d.column_name AND s.table_schema='
+                    . e($db, $src->schema) . ' AND s.table_name=' . e($db, $src->name($table)) . ' WHERE d.table_schema=' . e($db, $dest) . ' AND d.table_name=' . e($db, $table)), 'c') : [];
+            }
+            if (!$cols[$table]) {
+                return false;
+            }
+            $where = implode(' AND ', array_map(fn ($k, $v) => "d.`$k`=" . e($db, $v), array_keys($pk), $pk));
+            $same = implode(' AND ', array_map(fn ($c) => "d.`$c` <=> s.`$c`", $cols[$table]));
+            $on = implode(' AND ', array_map(fn ($k) => "s.`$k`=d.`$k`", array_keys($pk)));
+            return (int) one($db, "SELECT COUNT(*) FROM `$dest`.`$table` d JOIN {$src[$table]} s ON $on WHERE $where AND $same") === 1;
+        };
+        $res = ['provenance' => 0, 'legacy_identical' => 0];
+        $bad = array_filter($hits, function ($h) use ($prov, $legacyRow, &$res) {
+            if (in_array($h[5], ['rewrite', 'unresolved'], true)) {
+                return true;
+            }
+            if (!in_array($h[5], ['entity', 'fk'], true)) {
+                return false;
+            }
+            $pk = json_decode($h[3], true);
+            if (isset($prov["$h[0]|$h[1]|$h[2]|" . pk_canon($pk) . "|$h[4]"])) {
+                $res['provenance']++;
+                return false;
+            }
+            if ($legacyRow($h[1], $pk)) {
+                $res['legacy_identical']++;
+                return false;
+            }
+            return true;
+        });
+        out('residual entity/fk hits accepted: ' . json_encode($res));
         write_csv(report_dir() . '/renumber-residual.csv', ['ns', 'table', 'column', 'pk', 'id', 'class', 'reason', 'key'], $hits);
         $by = array_count_values(array_column($hits, 5));
         out('residual hits by class: ' . json_encode($by) . ' — ' . ($bad ? count($bad) . ' REMAINING REFERENCES (FAIL)' : 'no remaining references (OK)'));
@@ -569,11 +724,13 @@ if (realpath($_SERVER['SCRIPT_FILENAME'] ?? '') === __FILE__) {
     if ($prod) {
         write_csv(report_dir() . '/renumber-product-collisions.csv', ['destination_id', 'type', 'status', 'title', 'sku'],
             array_map(fn ($id, $p) => [$id, ...$p], array_keys($prod), $prod));
-        if (!isset($a['skip-products'])) {
+        if (!isset($a['skip-products']) && !isset($a['product-map'])) {
             fail(count($prod) . ' destination products/variations sit in legacy ID space (renumber-product-collisions.csv). Products are never relocated: decide, or pass --skip-products to move only non-product records');
         }
-        $cands['posts'] = array_values(array_diff($cands['posts'], array_keys($prod)));
-        out('product guard: ' . count($prod) . ' destination products/variations left in place (not relocated)');
+        $pm = isset($a['product-map']) ? check_product_map($db, $dest, $src, $a['product-map'], $prod) : [];
+        product_map($pm);
+        $cands['posts'] = array_values(array_diff($cands['posts'], array_diff(array_keys($prod), array_keys($pm))));
+        out('product guard: ' . count($pm) . ' products moved to verified legacy IDs (--product-map), ' . (count($prod) - count($pm)) . ' left in place');
     }
     out('candidates: posts=' . count($cands['posts']) . ' users=' . count($cands['users']));
     $run = start_run($db, $dest, "renumber-$mode", $a);

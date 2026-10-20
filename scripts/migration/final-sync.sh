@@ -146,6 +146,7 @@ pull-dest)
   $RS "cd '$KINSTA_REVIEW_ROOT' && set -o pipefail && wp db export - --single-transaction --quick --skip-triggers --hex-blob --default-character-set=utf8mb4 | gzip -1" > "$DIR/hosted-dest.sql.gz"
   T1=$(date -u +%FT%TZ)
   fp > "$DIR/dest-fingerprint-after.tsv"
+  bash scripts/deploy/remote/dest-fingerprint.sh --validate "$DIR/dest-fingerprint-before.tsv" "$DIR/dest-fingerprint-after.tsv" || { echo "fingerprint has NULL/non-numeric or missing values — refusing this copy"; exit 1; }
   cmp -s "$DIR/dest-fingerprint-before.tsv" "$DIR/dest-fingerprint-after.tsv" || { echo "destination changed during the pull (fingerprints differ) — refusing this copy; pull again during a content freeze"; diff "$DIR/dest-fingerprint-before.tsv" "$DIR/dest-fingerprint-after.tsv" | head; exit 1; }
   cp "$DIR/dest-fingerprint-after.tsv" "$DIR/dest-fingerprint.tsv"
   gunzip -t "$DIR/hosted-dest.sql.gz" && gunzip -c "$DIR/hosted-dest.sql.gz" | tail -c 300 | grep -q -- '-- Dump completed' || { echo "hosted dump incomplete — refusing"; exit 1; }

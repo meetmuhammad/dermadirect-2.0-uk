@@ -190,11 +190,33 @@ function source_identity(\mysqli $db, TableRef $S, bool $checksums = true): arra
     ];
     if ($checksums) {
         $names = array_map(fn ($t) => $S[$t], ['posts', 'postmeta', 'users', 'usermeta', 'comments', 'woocommerce_order_items', 'woocommerce_order_itemmeta']);
-        foreach (rows($db, 'CHECKSUM TABLE ' . implode(',', $names)) as $r) {
+        foreach (table_checksums($db, $names) as $r) {
             $id['checksum'][preg_replace('/^.*\./', '', $r['Table'])] = $r['Checksum'];
         }
     }
     return $id;
+}
+
+/** CHECKSUM TABLE rows for $tables; fails closed (never compares) on NULL, empty or missing checksums. */
+function table_checksums(\mysqli $db, array $tables): array
+{
+    $rows = rows($db, 'CHECKSUM TABLE ' . implode(',', $tables));
+    $err = checksum_error($rows, count($tables));
+    return $err === null ? $rows : fail($err);
+}
+
+/** Pure check behind table_checksums(): null when every row has a non-negative integer checksum. */
+function checksum_error(array $rows, int $want): ?string
+{
+    if (count($rows) !== $want) {
+        return 'CHECKSUM TABLE returned ' . count($rows) . " rows for $want tables";
+    }
+    foreach ($rows as $r) {
+        if (!preg_match('/^\d+$/D', (string) ($r['Checksum'] ?? ''))) {
+            return 'CHECKSUM TABLE ' . ($r['Table'] ?? '?') . ': no numeric checksum (' . var_export($r['Checksum'] ?? null, true) . ') — table missing or unreadable; refusing to compare';
+        }
+    }
+    return null;
 }
 
 function q(\mysqli $db, string $sql): \mysqli_result|bool
@@ -234,6 +256,10 @@ function ensure_state_tables(\mysqli $db, string $dest): void
         id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, run_id VARCHAR(32) NOT NULL, entity VARCHAR(32) NOT NULL,
         entity_id BIGINT UNSIGNED NOT NULL, action VARCHAR(24) NOT NULL, src_hash VARCHAR(40) NULL, dst_hash_before VARCHAR(40) NULL,
         note VARCHAR(255) NULL, at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP, KEY e (entity, entity_id), KEY r (run_id)) ENGINE=InnoDB");
+    // provenance of every key/FK cell renumber rewrote (reversible record; residual checks re-occupied IDs against it)
+    q($db, "CREATE TABLE IF NOT EXISTS `$dest`.`dd_mig_refs` (
+        id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, run_id VARCHAR(32) NOT NULL, ns VARCHAR(32) NOT NULL, tbl VARCHAR(64) NOT NULL,
+        col VARCHAR(64) NOT NULL, pk VARCHAR(512) NOT NULL, old_id BIGINT UNSIGNED NOT NULL, new_id BIGINT UNSIGNED NOT NULL, KEY n (ns, new_id)) ENGINE=InnoDB");
     q($db, "CREATE TABLE IF NOT EXISTS `$dest`.`dd_mig_runs` (
         run_id VARCHAR(32) PRIMARY KEY, tool VARCHAR(32) NOT NULL, args TEXT NOT NULL, started_at DATETIME NOT NULL,
         finished_at DATETIME NULL, status VARCHAR(16) NOT NULL, summary LONGTEXT NULL) ENGINE=InnoDB");

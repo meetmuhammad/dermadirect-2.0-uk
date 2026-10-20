@@ -10,7 +10,8 @@ W="./scripts/migration/wp.sh $DB"
 # an administrator that exists in THIS database (a hosted-derived baseline has no local-only accounts)
 ADMIN=$($W user list --role=administrator --field=user_login | grep -E "^[A-Za-z0-9._@-]+$" | head -1)
 [ -n "$ADMIN" ] || { echo "no administrator account in $DB"; exit 2; }
-t() { s=$(date +%s); "$@"; echo "  [$(( $(date +%s)-s ))s] $*" | cut -c1-160; }
+# timed step: capture the command's status before anything else runs, report it, and return it
+t() { s=$(date +%s); rc=0; "$@" || rc=$?; echo "  [$(( $(date +%s)-s ))s rc=$rc] $*" | cut -c1-160; return $rc; }
 
 # Scope 2026-10-19: the commerce-data refresh changes no destination configuration and no product
 # data. Plugin activation (Decision 3) and product-derived regeneration run only when asked for.

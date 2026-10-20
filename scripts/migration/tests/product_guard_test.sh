@@ -10,13 +10,16 @@ fails=0; t() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((
 C=dermadirect20uk-db-1; sql() { docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -N "$@"' sh "$@"; }
 R=./scripts/migration/run.sh
 PROD=696776; PAGE=696796   # legacy has an order at 696776 and nothing at 696796
+PROD2=696808; ATT=696053   # legacy order at 696808; ATT is a destination attachment at the legacy ID of PROD2's product
 sql -e "DROP DATABASE IF EXISTS $G; CREATE DATABASE $G;"
 for tb in wp_posts wp_postmeta wp_users wp_usermeta wp_options wp_term_relationships wp_comments wp_commentmeta; do sql -e "CREATE TABLE $G.$tb LIKE $B.$tb"; done
 sql -e "INSERT INTO $G.wp_options SELECT * FROM $B.wp_options WHERE option_name IN ('stylesheet','template','home','siteurl');
   INSERT INTO $G.wp_posts (ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count) VALUES
-   ($PROD,1,NOW(),UTC_TIMESTAMP(),'','Guard test product','','publish','open','closed','','guard-product','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'product','',0),
-   ($PAGE,1,NOW(),UTC_TIMESTAMP(),'','Guard test page','','publish','closed','closed','','guard-page','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'page','',0);
-  INSERT INTO $G.wp_postmeta (post_id,meta_key,meta_value) VALUES ($PROD,'_sku','GUARD-SKU'),($PROD,'_price','9.99');"
+   ($PROD,1,NOW(),UTC_TIMESTAMP(),'','Jalupro Recovery Cream (1x30ml)','','publish','open','closed','','guard-product','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'product','',0),
+   ($PAGE,1,NOW(),UTC_TIMESTAMP(),'','Guard test page','','publish','closed','closed','','guard-page','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'page','',0),
+   ($PROD2,1,NOW(),UTC_TIMESTAMP(),'','Teofil Lips (1x1.1ml)','','publish','open','closed','','guard-product-2','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'product','',0),
+   ($ATT,1,NOW(),UTC_TIMESTAMP(),'','Guard image','','inherit','open','closed','','guard-image','','',NOW(),UTC_TIMESTAMP(),'',0,'',0,'attachment','image/jpeg',0);
+  INSERT INTO $G.wp_postmeta (post_id,meta_key,meta_value) VALUES ($PROD,'_sku','07011030'),($PROD,'_price','9.99'),($PROD2,'_sku','06960537'),($PROD2,'_thumbnail_id','$ATT');"
 PFP=$(sql -e "SELECT MD5(CONCAT_WS('|',(SELECT CONCAT_WS('|',ID,post_title,post_type,post_status,post_name) FROM $G.wp_posts WHERE ID=$PROD),(SELECT GROUP_CONCAT(meta_key,'=',meta_value ORDER BY meta_key) FROM $G.wp_postmeta WHERE post_id=$PROD)))")
 
 $R renumber.php apply --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-1.log 2>&1; rc=$?
@@ -25,7 +28,7 @@ t "nothing was moved by the refused run" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $
 t "the colliding product is listed for decision" "grep -q '^$PROD,product' migration-reports/renumber-product-collisions.csv"
 
 $R renumber.php apply --dest=$G --src=$SRC --src-prefix=lgcy_ --skip-products > migration-reports/tmp-guard-2.log 2>&1; rc=$?
-t "--skip-products relocates only non-product records" "[ $rc = 0 ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM $G.wp_posts WHERE ID=$PAGE\")\" = 0 ] && [ \"\$(sql -e \"SELECT post_type FROM $G.wp_posts WHERE ID=$((PAGE + 300000))\")\" = page ]"
+t "--skip-products relocates only non-product records" "[ $rc = 0 ] && [ \"\$(sql -e \"SELECT COUNT(*) FROM $G.wp_posts WHERE ID IN ($PAGE,$ATT)\")\" = 0 ] && [ \"\$(sql -e \"SELECT post_type FROM $G.wp_posts WHERE ID=$((PAGE + 300000))\")\" = page ] && [ \"\$(sql -e \"SELECT meta_value FROM $G.wp_postmeta WHERE post_id=$PROD2 AND meta_key='_thumbnail_id'\")\" = $((ATT + 300000)) ]"
 t "the product is untouched: same ID, row and meta" "[ \"\$(sql -e \"SELECT MD5(CONCAT_WS('|',(SELECT CONCAT_WS('|',ID,post_title,post_type,post_status,post_name) FROM $G.wp_posts WHERE ID=$PROD),(SELECT GROUP_CONCAT(meta_key,'=',meta_value ORDER BY meta_key) FROM $G.wp_postmeta WHERE post_id=$PROD)))\")\" = '$PFP' ]"
 $R renumber.php apply --dest=$G --src=$SRC --src-prefix=lgcy_ --skip-products > migration-reports/tmp-guard-3.log 2>&1; rc=$?
 t "rerun is a no-op (page not moved twice, product still in place)" "[ $rc = 0 ] && grep -q 'nothing to move' migration-reports/tmp-guard-3.log && [ \"\$(sql -e \"SELECT COUNT(*) FROM $G.wp_posts WHERE ID IN ($PROD,$((PAGE + 300000)))\")\" = 2 ]"
@@ -42,6 +45,45 @@ scripts/deploy/package-initial.sh guardtest > migration-reports/tmp-guard-6.log 
 t "packaging refuses without explicit source, legacy snapshot and baseline" "[ $rc = 2 ] && grep -q 'needs --source' migration-reports/tmp-guard-6.log && [ ! -e recovery/deploy/initial-guardtest ]"
 PS=$(docker compose --profile cli run --rm -T --no-deps --entrypoint php wpcli -r 'echo (require "scripts/migration/config.php")["product_sync"] ? 1 : 0;' 2>/dev/null)
 t "product sync is off in the shared configuration" "[ '$PS' = 0 ]"
+
+# explicit identity correction (--product-map, approved 2026-10-20): identity-checked, references follow, rerun no-op
+LEG=701103   # the legacy product with this SKU/title
+sql -e "INSERT INTO $G.wp_wc_product_meta_lookup (product_id,sku) VALUES ($PROD,'07011030'); INSERT INTO $G.wp_stock_log (product_id,qty,date_created) VALUES ($PROD,5,NOW());
+  INSERT INTO $G.wp_options (option_name,option_value,autoload) VALUES ('_transient_wc_related_$PROD','a:0:{}','off'),('_transient_timeout_wc_related_$PROD','9999999999','off');
+  INSERT INTO $G.wp_term_relationships (object_id,term_taxonomy_id) VALUES ($PROD,2)"
+M=migration-reports/tmp-guard-map.csv
+printf 'destination_id,legacy_id\n%s,%s\n%s,%s\n' $PROD $LEG $PROD $LEG > $M
+$R renumber.php apply --dest=$G --src=$SRC --src-prefix=lgcy_ --product-map=$M > migration-reports/tmp-guard-7b.log 2>&1; rc=$?
+t "--product-map refuses a duplicated row (nothing moved)" "[ $rc != 0 ] && grep -q 'duplicate row or target' migration-reports/tmp-guard-7b.log && [ \"\$(sql -e \"SELECT COUNT(*) FROM $G.wp_posts WHERE ID=$PROD\")\" = 1 ]"
+printf 'destination_id,legacy_id\n%s,%s\n' $PROD 697314 > $M
+$R renumber.php apply --dest=$G --src=$SRC --src-prefix=lgcy_ --product-map=$M > migration-reports/tmp-guard-7.log 2>&1; rc=$?
+t "--product-map refuses a target whose legacy SKU/title differ (nothing moved)" "[ $rc != 0 ] && grep -q 'does not match' migration-reports/tmp-guard-7.log && [ \"\$(sql -e \"SELECT COUNT(*) FROM $G.wp_posts WHERE ID=$PROD\")\" = 1 ]"
+printf 'destination_id,legacy_id\n%s,%s\n%s,%s\n' $PROD $LEG $PROD2 $ATT > $M
+$R renumber.php apply --dest=$G --src=$SRC --src-prefix=lgcy_ --product-map=$M > migration-reports/tmp-guard-8.log 2>&1; rc=$?
+t "--product-map moves the product to its legacy ID with every reference" "[ $rc = 0 ] && [ \"\$(sql -e \"SELECT CONCAT_WS(',',(SELECT COUNT(*) FROM $G.wp_posts WHERE ID=$PROD),(SELECT post_type FROM $G.wp_posts WHERE ID=$LEG),(SELECT COUNT(*) FROM $G.wp_postmeta WHERE post_id=$LEG),(SELECT COUNT(*) FROM $G.wp_wc_product_meta_lookup WHERE product_id=$LEG),(SELECT COUNT(*) FROM $G.wp_stock_log WHERE product_id=$LEG),(SELECT COUNT(*) FROM $G.wp_term_relationships WHERE object_id=$LEG))\")\" = '0,product,2,1,1,1' ]"
+t "product values unchanged apart from the ID" "[ \"\$(sql -e \"SELECT MD5(CONCAT_WS('|',(SELECT CONCAT_WS('|',$PROD,post_title,post_type,post_status,post_name) FROM $G.wp_posts WHERE ID=$LEG),(SELECT GROUP_CONCAT(meta_key,'=',meta_value ORDER BY meta_key) FROM $G.wp_postmeta WHERE post_id=$LEG)))\")\" = '$PFP' ]"
+t "the transient cache naming the old ID is deleted with its timeout" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $G.wp_options WHERE option_name LIKE '%wc_related_$PROD'\")\" = 0 ]"
+t "the reversible mapping is recorded" "[ \"\$(sql -e \"SELECT COUNT(*) FROM $G.dd_mig_idmap WHERE ns='posts' AND old_id=$PROD AND new_id=$LEG\")\" = 1 ]"
+$R renumber.php apply --dest=$G --src=$SRC --src-prefix=lgcy_ --product-map=$M > migration-reports/tmp-guard-9.log 2>&1; rc=$?
+t "--product-map rerun is a no-op" "[ $rc = 0 ] && grep -q 'nothing to move' migration-reports/tmp-guard-9.log"
+# PROD2 now holds ATT's vacated ID: its own rows written by renumber pass the residual check (provenance) ...
+t "PROD2 re-occupies the vacated attachment ID, keeping the moved image reference" "[ \"\$(sql -e \"SELECT CONCAT(post_type,',',(SELECT meta_value FROM $G.wp_postmeta WHERE post_id=$ATT AND meta_key='_thumbnail_id')) FROM $G.wp_posts WHERE ID=$ATT\")\" = 'product,$((ATT + 300000))' ]"
+$R renumber.php residual --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-10.log 2>&1; rc=$?
+t "residual passes: every hit on the re-occupied ID was written by renumber" "[ $rc = 0 ] && grep -q 'no remaining references (OK)' migration-reports/tmp-guard-10.log"
+# ... but a stale reference to the OLD attachment (never rewritten) must still fail, even though the ID is reused
+sql -e "INSERT INTO $G.wp_posts (ID,post_author,post_date,post_date_gmt,post_content,post_title,post_excerpt,post_status,comment_status,ping_status,post_password,post_name,to_ping,pinged,post_modified,post_modified_gmt,post_content_filtered,post_parent,guid,menu_order,post_type,post_mime_type,comment_count) VALUES (1001,1,NOW(),UTC_TIMESTAMP(),'','stale child','','inherit','open','closed','','stale-child','','',NOW(),UTC_TIMESTAMP(),'',$ATT,'',0,'attachment','image/jpeg',0)"
+$R renumber.php residual --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-11.log 2>&1; rc=$?
+t "residual FAILS on a stale post_parent to the reused ID (not written by renumber)" "[ $rc != 0 ] && grep -q 'REMAINING REFERENCES (FAIL)' migration-reports/tmp-guard-11.log"
+sql -e "DELETE FROM $G.wp_posts WHERE ID=1001"
+# after the sync, the vacated old product ID holds the imported LEGACY order: accepted only if identical to the source row
+MID=$(sql -e "SELECT MIN(meta_id) FROM $SRC.lgcy_postmeta WHERE post_id=$PROD")
+sql -e "INSERT INTO $G.wp_posts SELECT * FROM $SRC.lgcy_posts WHERE ID=$PROD; INSERT INTO $G.wp_postmeta SELECT * FROM $SRC.lgcy_postmeta WHERE meta_id=$MID"
+$R renumber.php residual --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-12.log 2>&1; rc=$?
+t "residual passes when the vacated ID holds the identical legacy record (post + meta)" "[ $rc = 0 ] && grep -q '\"legacy_identical\":2' migration-reports/tmp-guard-12.log"
+sql -e "UPDATE $G.wp_postmeta SET meta_value=CONCAT(meta_value,'x') WHERE meta_id=$MID"
+$R renumber.php residual --dest=$G --src=$SRC --src-prefix=lgcy_ > migration-reports/tmp-guard-13.log 2>&1; rc=$?
+t "residual FAILS when that row differs from the source in any column" "[ $rc != 0 ] && grep -q 'REMAINING REFERENCES (FAIL)' migration-reports/tmp-guard-13.log"
+sql -e "DELETE FROM $G.wp_postmeta WHERE meta_id=$MID; DELETE FROM $G.wp_posts WHERE ID=$PROD"
 
 [ "${KEEP:-}" ] || { sql -e "DROP DATABASE $G"; rm -f migration-reports/tmp-guard-*.log; }
 [ $fails = 0 ] && echo "ALL PASSED" || { echo "$fails FAILED"; exit 1; }

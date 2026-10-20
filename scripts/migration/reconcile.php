@@ -67,11 +67,18 @@ $notes = fn ($S) => (int) one($db, "SELECT COUNT(*) FROM {$S['comments']} WHERE 
 $check('order notes: count match and IDs preserved', $notes($SRC) === $notes($DST) && (int) one($db, "SELECT COUNT(*) FROM {$SRC['comments']} s LEFT JOIN `$dest`.wp_comments d ON d.comment_ID=s.comment_ID AND d.comment_post_ID=s.comment_post_ID WHERE s.comment_post_ID IN ($legacyOrders) AND d.comment_ID IS NULL") === 0, $notes($DST));
 
 // 4. Ownership: every legacy order's customer is the same user ID and that user exists on the destination with the same login
-$own = rows($db, "SELECT COUNT(*) orders, SUM(dc.meta_value <=> sc.meta_value) same_customer, SUM(sc.meta_value>0) registered, SUM(sc.meta_value>0 AND du.ID IS NOT NULL AND du.user_login=su.user_login) owner_ok, SUM(sc.meta_value=0) guest
+// --identity-confirmations=<tsv user_id,...>: owner-confirmed same person although the login differs between the sites
+// (e.g. an email/login changed during a local migration). Only those user IDs, reported separately.
+$confirmed = [];
+foreach (!empty($a['identity-confirmations']) ? array_slice(file($a['identity-confirmations'], FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES), 1) : [] as $line) {
+    $confirmed[] = (int) explode("\t", $line)[0];
+}
+$cIn = $confirmed ? implode(',', $confirmed) : '0';
+$own = rows($db, "SELECT COUNT(*) orders, SUM(dc.meta_value <=> sc.meta_value) same_customer, SUM(sc.meta_value>0) registered, SUM(sc.meta_value>0 AND du.ID IS NOT NULL AND (du.user_login=su.user_login OR du.ID IN ($cIn))) owner_ok, SUM(sc.meta_value>0 AND du.ID IN ($cIn) AND du.user_login<>su.user_login) owner_confirmed_identity, SUM(sc.meta_value=0) guest
     FROM {$SRC['posts']} s JOIN {$SRC['postmeta']} sc ON sc.post_id=s.ID AND sc.meta_key='_customer_user' JOIN `$dest`.wp_postmeta dc ON dc.post_id=s.ID AND dc.meta_key='_customer_user'
     LEFT JOIN {$SRC['users']} su ON su.ID=sc.meta_value LEFT JOIN `$dest`.wp_users du ON du.ID=sc.meta_value WHERE s.post_type='shop_order'")[0];
 $regWithUser = (int) one($db, "SELECT COUNT(*) FROM {$SRC['posts']} s JOIN {$SRC['postmeta']} sc ON sc.post_id=s.ID AND sc.meta_key='_customer_user' JOIN {$SRC['users']} su ON su.ID=sc.meta_value WHERE s.post_type='shop_order'");
-$check('order ownership: same customer ID; owner exists with same login', $own['orders'] == $own['same_customer'] && (int) $own['owner_ok'] === $regWithUser, $own + ['registered_with_existing_legacy_user' => $regWithUser]);
+$check('order ownership: same customer ID; owner exists with same login', $own['orders'] == $own['same_customer'] && (int) $own['owner_ok'] === $regWithUser, $own + ['registered_with_existing_legacy_user' => $regWithUser, 'identity_confirmed_user_ids' => $confirmed]);
 
 // 5. Refund parents
 $check('refunds: every refund parent is an order on the destination', (int) one($db, "SELECT COUNT(*) FROM `$dest`.wp_posts r LEFT JOIN `$dest`.wp_posts o ON o.ID=r.post_parent AND o.post_type='shop_order' WHERE r.post_type='shop_order_refund' AND o.ID IS NULL") === (int) one($db, "SELECT COUNT(*) FROM {$SRC['posts']} r LEFT JOIN {$SRC['posts']} o ON o.ID=r.post_parent AND o.post_type='shop_order' WHERE r.post_type='shop_order_refund' AND o.ID IS NULL"));
@@ -98,7 +105,7 @@ if (cfg()['product_sync']) {
 
 // 7. Payment references
 $refKeys = ['_transaction_id', 'super_transaction_id', '_stripe_intent_id', '_payment_intent_id', '_stripe_customer_id', '_wc_shipment_tracking_items', 'marketing_opt_in_consent', 'wc_af_score'];
-$pr = fn ($S) => rows($db, "SELECT meta_key, COUNT(*) n, MD5(GROUP_CONCAT(CONCAT(post_id,'=',MD5(meta_value)) ORDER BY post_id, meta_value)) h FROM {$S['postmeta']} WHERE post_id IN ($legacyOrders) AND meta_key IN ('" . implode("','", $refKeys) . "') GROUP BY meta_key ORDER BY meta_key");
+$pr = fn ($S) => rows($db, "SELECT meta_key, COUNT(*) n, MD5(GROUP_CONCAT(CONCAT(post_id,'=',COALESCE(MD5(meta_value),'~')) ORDER BY post_id, meta_value)) h FROM {$S['postmeta']} WHERE post_id IN ($legacyOrders) AND meta_key IN ('" . implode("','", $refKeys) . "') GROUP BY meta_key ORDER BY meta_key");
 $check('payment/shipping/consent/anti-fraud references identical', $pr($SRC) == $pr($DST), array_column($pr($DST), 'n', 'meta_key'));
 
 // 8. Customers: password hashes, roles, addresses for all non-staff legacy users
@@ -115,7 +122,7 @@ $check('coupons: count and total usage match; IDs preserved', $cp($SRC) == $cp($
 // 10. Retained plugin tables: row counts and content checksums
 $tbl = [];
 foreach (['wp_woocommerce_payment_tokens', 'wp_woocommerce_payment_tokenmeta', 'wp_webis_pbet', 'wp_webis_pbet_order', 'wp_webis_pbet_order_item', 'wp_woocommerce_bis_notifications', 'wp_woocommerce_bis_activity', 'wp_gens_raf', 'wp_gens_rafmeta', 'wp_trackship_shipment', 'wp_wdr_order_item_discounts'] as $t) {
-    $cs = rows($db, "CHECKSUM TABLE {$SRC[$t]}, `$dest`.`$t`");
+    $cs = table_checksums($db, [$SRC[$t], "`$dest`.`$t`"]);
     $n = [(int) one($db, "SELECT COUNT(*) FROM {$SRC[$t]}"), (int) one($db, "SELECT COUNT(*) FROM `$dest`.`$t`")];
     $tbl[$t] = ['rows' => $n, 'checksum_equal' => $cs[0]['Checksum'] === $cs[1]['Checksum']];
 }
@@ -143,7 +150,7 @@ if ($before) {
     $commercial = $commercialIn;
     $approvedIds = implode(',', array_map('intval', array_keys(cfg()['approved_sku_changes']))) ?: '0';
     $skuApproved = " AND NOT (pm.meta_key='_sku' AND pm.post_id IN ($approvedIds))"; // approved SKU changes (config)
-    $metaSide = fn ($X) => "SELECT pm.post_id, pm.meta_key, MD5(pm.meta_value) h FROM `$X`.wp_postmeta pm JOIN `$before`.wp_posts p ON p.ID=pm.post_id AND p.post_type NOT IN ($commerce) WHERE NOT (p.post_type IN ('product','product_variation') AND pm.meta_key IN ($commercial)) AND pm.meta_key NOT IN ('_edit_lock')" . $skuApproved;  // _edit_lock: editor-session stamp, not content
+    $metaSide = fn ($X) => "SELECT pm.post_id, pm.meta_key, COALESCE(MD5(pm.meta_value),'~') h FROM `$X`.wp_postmeta pm JOIN `$before`.wp_posts p ON p.ID=pm.post_id AND p.post_type NOT IN ($commerce) WHERE NOT (p.post_type IN ('product','product_variation') AND pm.meta_key IN ($commercial)) AND pm.meta_key NOT IN ('_edit_lock')" . $skuApproved;  // _edit_lock: editor-session stamp, not content
     $metaDiff = (int) one($db, "SELECT COUNT(*) FROM (SELECT post_id, meta_key, h, COUNT(*) c FROM ({$metaSide($before)}) x GROUP BY 1,2,3) b LEFT JOIN (SELECT post_id, meta_key, h, COUNT(*) c FROM ({$metaSide($dest)}) y GROUP BY 1,2,3) a ON a.post_id=b.post_id AND a.meta_key=b.meta_key AND a.h=b.h AND a.c=b.c WHERE a.post_id IS NULL");
     $metaAdded = (int) one($db, "SELECT COUNT(*) FROM (SELECT post_id, meta_key, h FROM ({$metaSide($dest)}) y) a LEFT JOIN (SELECT post_id, meta_key, h FROM ({$metaSide($before)}) x) b ON b.post_id=a.post_id AND b.meta_key=a.meta_key AND b.h=a.h WHERE b.post_id IS NULL");
     $optVolatile = "b.option_name NOT LIKE '\\_transient%' AND b.option_name NOT LIKE '\\_site\\_transient%' AND b.option_name NOT IN ('cron','action_scheduler_lock_async-request-runner','dd_safety_blocked_log','rewrite_rules','generateblocks_dynamic_css_time') AND b.option_name NOT LIKE 'wc\\_%\\_session%'";
@@ -158,11 +165,41 @@ if ($before) {
         'action_scheduler_migration_status', 'woocommerce_product_lookup_table_is_generating'];
     $res['options_changed_by_application_phase'] = array_values(array_intersect($optDiff, $appPhase));
     $optDiff = array_values(array_diff($optDiff, $appPhase));
+    // Exactly verified (same rules as verify-parity.php): wp_user_roles may only GAIN the configured customer-group roles;
+    // fs_active_plugins / fs_accounts may differ only in Freemius per-boot runtime paths.
+    $ov = fn ($X, $n) => @unserialize((string) one($db, "SELECT option_value FROM `$X`.wp_options WHERE option_name=" . e($db, $n)), ['allowed_classes' => false]);
+    $flat = function ($x, string $p = '') use (&$flat): array {
+        $x = is_object($x) ? (array) $x : $x;
+        if (!is_array($x)) {
+            return [$p => $x];
+        }
+        $o = [];
+        foreach ($x as $k => $v) {
+            $o += $flat($v, $p === '' ? (string) $k : "$p.$k");
+        }
+        return $o;
+    };
+    $res['options_verified_exact'] = [];
+    if (in_array('wp_user_roles', $optDiff, true)) {
+        [$rb, $rd] = [$ov($before, 'wp_user_roles'), $ov($dest, 'wp_user_roles')];
+        if (is_array($rb) && is_array($rd) && array_intersect_key($rd, $rb) == $rb && array_keys(array_diff_key($rd, $rb)) == array_values(array_intersect(cfg()['customer_group_roles'], array_keys($rd)))) {
+            $res['options_verified_exact'][] = 'wp_user_roles (+' . implode(',', array_keys(array_diff_key($rd, $rb))) . ')';
+            $optDiff = array_values(array_diff($optDiff, ['wp_user_roles']));
+        }
+    }
+    foreach (array_intersect($optDiff, ['fs_accounts', 'fs_active_plugins']) as $o) {
+        [$fb, $fd] = [$flat($ov($before, $o)), $flat($ov($dest, $o))];
+        $paths = array_filter(array_unique(array_merge(array_keys($fb), array_keys($fd))), fn ($k) => ($fb[$k] ?? null) !== ($fd[$k] ?? null));
+        if (!array_filter($paths, fn ($k) => !preg_match('/^(plugin_data\.[^.]+\.last_load_timestamp|plugins\..+\.timestamp|newest\.timestamp|abspath)$/', $k))) {
+            $res['options_verified_exact'][] = "$o (Freemius runtime: " . implode(', ', $paths) . ')';
+            $optDiff = array_values(array_diff($optDiff, [$o]));
+        }
+    }
     // WordPress/plugin runtime state written by admin sessions and blocked outbound calls — not content.
     $runtime = '/^(recovery_keys|recovery_mode_email_last_sent|external_updates-.*|ure_admin_(sub_)?menu_.*|wt_created_.*document_count|wc_bis_notice_options|edd_sl_failed_http_.*)$/';
     $res['options_runtime_state_changed'] = array_values(array_filter($optDiff, fn ($o) => preg_match($runtime, $o)));
     $optDiff = array_values(array_filter($optDiff, fn ($o) => !preg_match($runtime, $o)));
-    $check('protected content: options unchanged (caches/queues excluded; approved plugin-activation options listed)', !$optDiff, ['unexpected' => $optDiff, 'approved_application_phase' => $res['options_changed_by_application_phase'], 'runtime_state' => $res['options_runtime_state_changed']]);
+    $check('protected content: options unchanged (caches/queues excluded; approved plugin-activation options listed)', !$optDiff, ['unexpected' => $optDiff, 'verified_exact' => $res['options_verified_exact'], 'approved_application_phase' => $res['options_changed_by_application_phase'], 'runtime_state' => $res['options_runtime_state_changed']]);
     $check('protected content: terms, term meta, non-visibility term relationships unchanged', $termDiff === 0 && $relDiff === 0, ['terms' => $termDiff, 'relationships' => $relDiff]);
 }
 

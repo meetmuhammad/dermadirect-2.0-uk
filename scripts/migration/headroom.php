@@ -27,7 +27,8 @@ function headroom(\mysqli $db, string $dest, TableRef $S, bool $apply): array
         $srcMax = (int) one($db, "SELECT COALESCE(MAX(`$pk`),0) FROM {$S[$table]}");
         $ai = (int) one($db, 'SELECT AUTO_INCREMENT FROM information_schema.tables WHERE table_schema=' . e($db, $dest) . ' AND table_name=' . e($db, $table));
         $ns = ['wp_posts' => 'posts', 'wp_users' => 'users'][$table] ?? null;
-        $reloc = $ns ? rows($db, "SELECT MIN(new_id) lo, MAX(new_id) hi FROM `$dest`.dd_mig_idmap WHERE ns='$ns'")[0] : ['lo' => null, 'hi' => null];
+        // the relocated band is the offset mappings only; explicit --product-map targets are verified legacy IDs
+        $reloc = $ns ? rows($db, "SELECT MIN(new_id) lo, MAX(new_id) hi FROM `$dest`.dd_mig_idmap WHERE ns='$ns' AND new_id = old_id + " . (int) $c['relocate_offset'][$ns])[0] : ['lo' => null, 'hi' => null];
         $nextBand = $reloc['lo'] !== null ? (int) $reloc['lo'] : $start;
         $excl = $ns ? " AND `$pk` NOT IN (SELECT new_id FROM `$dest`.dd_mig_idmap WHERE ns='$ns')" : '';
         // Destination-generated rows in legacy's growth range (above legacy max, below the future range),

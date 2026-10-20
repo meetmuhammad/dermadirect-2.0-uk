@@ -23,9 +23,11 @@ restore)
 verify)
   a=$(mktemp); b=$(mktemp)
   for db in "$2" "$3"; do
-    t=$(sql -e "select group_concat(concat('\`',table_schema,'\`.\`',table_name,'\`')) from information_schema.tables where table_schema='$db' and table_type='BASE TABLE'")
+    t=$(sql -e "set session group_concat_max_len=1000000; select group_concat(concat('\`',table_schema,'\`.\`',table_name,'\`')) from information_schema.tables where table_schema='$db' and table_type='BASE TABLE'")
     sql -e "CHECKSUM TABLE $t EXTENDED" | sed "s/^[^.]*\.//" | sort > "$([ "$db" = "$2" ] && echo $a || echo $b)"
   done
+  # fail closed: a NULL (missing/unreadable table), empty or non-numeric checksum is never "equal"
+  for f in "$a" "$b"; do [ -s "$f" ] && awk -F'\t' 'NF!=2 || $2 !~ /^[0-9]+$/ {exit 1}' "$f" || { echo "VERIFY FAILED: missing, NULL or non-numeric checksum"; head -5 "$f"; exit 1; }; done
   if diff "$a" "$b" >/dev/null; then echo "VERIFY OK: $(wc -l < $a | tr -d ' ') tables identical ($2 = $3)"; else echo "VERIFY FAILED"; diff "$a" "$b" | head -20; exit 1; fi ;;
 *) sed -n 2,5p "$0"; exit 1 ;;
 esac

@@ -13,13 +13,15 @@
 set -eu
 LABEL=${1:?label}; shift
 SRC=""; LEG=""; BASE=""; UPL=web/app/uploads; FROM=""
-for a in "$@"; do case "$a" in --source=*) SRC=${a#*=};; --legacy-snapshot=*) LEG=${a#*=};; --baseline-dir=*) BASE=${a#*=};; --uploads-dir=*) UPL=${a#*=};; --rewrite-from=*) FROM=${a#*=};; *) echo "unknown option $a"; exit 2;; esac; done
+for a in "$@"; do case "$a" in --source=*) SRC=${a#*=};; --legacy-snapshot=*) LEG=${a#*=};; --baseline-dir=*) BASE=${a#*=};; --uploads-dir=*) UPL=${a#*=};; --rewrite-from=*) FROM=${a#*=};; --notes=*) NOTES=${a#*=};; *) echo "unknown option $a"; exit 2;; esac; done
 cd "$(dirname "$0")/../.."
 [ -n "$SRC" ] && [ -n "$LEG" ] && [ -n "$BASE" ] || { echo "needs --source=<candidate db> --legacy-snapshot=<source db> --baseline-dir=<pull dir>"; exit 2; }
 for f in destination-identity.tsv dest-fingerprint.tsv; do [ -s "$BASE/$f" ] || { echo "baseline dir lacks $f (pull it with final-sync.sh pull-dest)"; exit 2; }; done
 . ./.deploy-targets
 URL=$KINSTA_REVIEW_URL; X=dd_rh_test_export_$(echo "$LABEL" | tr -c 'a-z0-9_\n' '_')
 OUT=recovery/deploy/initial-$LABEL
+# the manifest's code_commit must be exactly the code that built the package
+[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "refusing: tracked code has uncommitted changes (commit first; the manifest records the commit)"; exit 2; }
 [ -z "${RESUME_AT:-}" ] && [ -e "$OUT" ] && { echo "refusing: $OUT exists (packages are never rebuilt in place; use a new label)"; exit 2; }
 mkdir -p "$OUT/uploads" "$OUT/remote"; chmod 700 recovery/deploy "$OUT"
 C=dermadirect20uk-db-1
@@ -117,12 +119,18 @@ EXTRA=$(sql -e "SELECT CONCAT(',\"users\":',(SELECT COUNT(*) FROM $X.wp_users),'
 SNAPID=$(sql -e "SELECT CONCAT('{',GROUP_CONCAT(CONCAT('\"',k,'\":\"',REPLACE(v,'\"',''),'\"') ORDER BY k),'}') FROM \`$LEG\`.lgcy_dd_snapshot")
 BASEID=$(awk -F'\t' '{gsub(/"/,"",$2); printf "%s\"%s\":\"%s\"", (NR>1?",":""), $1, $2}' "$BASE/destination-identity.tsv")
 cp "$BASE/dest-fingerprint.tsv" "$OUT/destination-fingerprint.tsv"; cp "$BASE/destination-identity.tsv" "$OUT/destination-identity.tsv"
+# explicit identity corrections (IDs only): mappings that are not the fixed relocation offset
+sql -e "SELECT old_id, new_id, kind, reason FROM $X.dd_mig_idmap WHERE ns='posts' AND new_id <> old_id + 300000 ORDER BY old_id" > "$OUT/product-id-corrections.tsv"
+PCORR=$(grep -c . "$OUT/product-id-corrections.tsv" || true)
+[ -n "${NOTES:-}" ] && cp "$NOTES" "$OUT/KNOWN-ISSUES.txt"
 cat > "$OUT/manifest.json" <<JSON
 {"label":"$LABEL","created_utc":"$(date -u +%FT%TZ)","code_commit":"$(git rev-parse HEAD)","target_url":"$URL",
  "candidate_db":"$SRC","candidate_sha256":"$(cut -d' ' -f1 "$OUT/source-candidate.sql.gz.sha256" 2>/dev/null)",
  "legacy_snapshot":$SNAPID,"destination_baseline":{$BASEID},"url_rewrite":"${FROM:-none}","counts":$COUNTS$EXTRA,
  "excluded":["local-only records","transients, sessions, session_tokens","synthetic DD-MIGRATION-TEST records","Docker/.env/local mu-plugins (not in package)"],
  "preserved_on_import_from_hosted":["staff/admin users by identity (restore-staff.php)","retained gateway/SMTP/integration options (initial-import.sh RETAIN)",".env, uploads, server plugins"],
+ "approved_transformations":{"product_id_corrections":$PCORR,"product_id_corrections_file":"product-id-corrections.tsv","note":"destination products moved to their verified legacy product IDs (identity: SKU+title+type); every reference followed; reversible map in dd_mig_idmap / dd_mig_refs"},
+ "known_issues_file":"${NOTES:+KNOWN-ISSUES.txt}",
  "drift_guard":"initial-import.sh refuses unless the hosted fingerprint equals destination-fingerprint.tsv"}
 JSON
 rm -f "$OUT/source-candidate.sql.gz" "$OUT/source-candidate.sql.gz.sha256"
