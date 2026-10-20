@@ -67,8 +67,12 @@ echo "== residual checks"
 txtcols() { sql -e "SELECT GROUP_CONCAT(CONCAT('\`',column_name,'\` LIKE ''%$2%''') SEPARATOR ' OR ') FROM information_schema.columns WHERE table_schema='$X' AND table_name='$1' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext')"; }
 # legacy-owned = records that exist in the legacy snapshot (destination-only records kept by the sync are
 # destination-owned: their values are listed under REPORTED, never rewritten here)
-COMMERCE="SELECT ID FROM $X.wp_posts WHERE post_type IN ('shop_order','shop_order_refund','shop_coupon') AND ID IN (SELECT ID FROM \`$LEG\`.lgcy_posts)"
-CUSTOMERS="SELECT user_id FROM $X.wp_usermeta WHERE meta_key='wp_capabilities' AND (meta_value LIKE '%\"customer\"%' OR meta_value LIKE '%\"blocked_customer\"%') AND user_id IN (SELECT ID FROM \`$LEG\`.lgcy_users)"
+# materialised once with primary keys (a nested IN over the snapshot re-ran per row on 11M meta rows and
+# stalled the database during the 2026-10-20 rehearsal)
+sql -e "DROP TABLE IF EXISTS $X.dd_pkg_commerce; CREATE TABLE $X.dd_pkg_commerce (id BIGINT UNSIGNED PRIMARY KEY) SELECT p.ID id FROM $X.wp_posts p JOIN \`$LEG\`.lgcy_posts l ON l.ID=p.ID WHERE p.post_type IN ('shop_order','shop_order_refund','shop_coupon');
+  DROP TABLE IF EXISTS $X.dd_pkg_customers; CREATE TABLE $X.dd_pkg_customers (id BIGINT UNSIGNED PRIMARY KEY) SELECT DISTINCT m.user_id id FROM $X.wp_usermeta m JOIN \`$LEG\`.lgcy_users l ON l.ID=m.user_id WHERE m.meta_key='wp_capabilities' AND (m.meta_value LIKE '%\"customer\"%' OR m.meta_value LIKE '%\"blocked_customer\"%')"
+COMMERCE="SELECT id FROM $X.dd_pkg_commerce"
+CUSTOMERS="SELECT id FROM $X.dd_pkg_customers"
 KEYED="wp_wc_orders wp_wc_order_addresses wp_wc_orders_meta wp_wc_order_operational_data wp_woocommerce_order_items wp_woocommerce_order_itemmeta wp_woocommerce_payment_tokens wp_woocommerce_payment_tokenmeta wp_webis_pbet wp_webis_pbet_order wp_webis_pbet_order_item wp_woocommerce_bis_notifications wp_woocommerce_bis_notificationsmeta wp_woocommerce_bis_activity wp_gens_raf wp_gens_rafmeta wp_gens_raf_guest_referrals wp_wt_sc_coupon_lookup wp_wdr_order_item_discounts wp_pp_order_actions_log wp_trackship_shipment wp_trackship_shipment_meta wp_zorem_email_sms_log wp_stock_log wp_wc_order_stats wp_wc_order_product_lookup wp_wc_order_tax_lookup wp_wc_order_coupon_lookup wp_wc_customer_lookup"
 : > "$OUT/residuals-reported.tsv"
 for needle in "localhost:808" "127.0.0.1:808" "httpsdermadirectcom.local" "/var/www/html" "DD-MIGRATION-TEST" "@example.invalid"; do
@@ -83,6 +87,7 @@ for needle in "localhost:808" "127.0.0.1:808" "httpsdermadirectcom.local" "/var/
   Q=$(sql -e "SELECT GROUP_CONCAT(CONCAT('SELECT ''',table_name,'.',column_name,''' c, COUNT(*) n FROM \`$X\`.\`',table_name,'\` WHERE \`',column_name,'\` LIKE ''%$needle%''') SEPARATOR ' UNION ALL ') FROM information_schema.columns WHERE table_schema='$X' AND data_type IN ('char','varchar','tinytext','text','mediumtext','longtext') AND table_name LIKE 'wp\\_%'")
   echo "SELECT * FROM ($Q) x WHERE n>0" | sql | awk -v n="$needle" '{print n "\t" $0}' >> "$OUT/residuals-reported.tsv"
 done
+sql -e "DROP TABLE IF EXISTS $X.dd_pkg_commerce, $X.dd_pkg_customers"
 echo "== dump package database"
 docker exec "$C" sh -c 'mariadb-dump -uroot -p"$MYSQL_ROOT_PASSWORD" --single-transaction --quick --hex-blob --default-character-set=utf8mb4 --skip-triggers "$1"' sh $X | gzip -6 > "$OUT/db.sql.gz"
 WANT=$(sql -e "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='$X' AND table_type='BASE TABLE'")
