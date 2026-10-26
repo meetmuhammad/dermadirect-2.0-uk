@@ -23,13 +23,17 @@ function candidates(\mysqli $db, string $dest, TableRef|string $src): array
     $S = is_string($src) ? new TableRef($src, $c['prefix']) : $src;
     $hasMap = (int) one($db, 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=' . e($db, $dest) . " AND table_name='dd_mig_idmap'");
     $mapped = fn ($ns) => $hasMap ? " AND d.ID NOT IN (SELECT new_id FROM `$dest`.dd_mig_idmap WHERE ns='$ns')" : '';
+    // Rows an earlier sync wrote (ledger insert/replace/upsert) are legacy-origin, even if legacy has since purged them:
+    // they are never destination-owned, so they are not relocation candidates (the sync keeps them as destination-only).
+    $hasLedger = (int) one($db, 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema=' . e($db, $dest) . " AND table_name='dd_mig_ledger'");
+    $synced = $hasLedger ? " AND d.ID NOT IN (SELECT entity_id FROM `$dest`.dd_mig_ledger WHERE entity IN ('orders','coupons') AND action IN ('insert','replace','upsert'))" : '';
     $pc = (int) $c['cutoff']['posts'];
     $pf = (int) $c['future_start']['wp_posts'];
     $uc = (int) $c['cutoff']['users'];
     $uf = (int) $c['future_start']['wp_users'];
     $posts = array_map('intval', array_column(rows($db, "SELECT d.ID FROM " . t($dest, 'posts') . " d
         LEFT JOIN {$S['posts']} s ON s.ID=d.ID AND s.post_type=d.post_type AND s.post_date_gmt=d.post_date_gmt
-        WHERE d.ID > $pc AND d.ID < $pf AND s.ID IS NULL" . $mapped('posts') . " ORDER BY d.ID"), 'ID'));
+        WHERE d.ID > $pc AND d.ID < $pf AND s.ID IS NULL" . $mapped('posts') . $synced . " ORDER BY d.ID"), 'ID'));
     $users = array_map('intval', array_column(rows($db, "SELECT d.ID FROM " . t($dest, 'users') . " d
         LEFT JOIN {$S['users']} s ON s.ID=d.ID AND s.user_login=d.user_login AND s.user_registered=d.user_registered
         WHERE d.ID > $uc AND d.ID < $uf AND s.ID IS NULL" . $mapped('users') . " ORDER BY d.ID"), 'ID'));

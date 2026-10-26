@@ -259,7 +259,7 @@ $optAdded = array_column(rows($db, "SELECT b.option_name FROM {$D['options']} b 
 // the only permitted option change: wp_user_roles gains exactly the verified group roles, nothing else
 $rb = @unserialize((string) $opt($B, 'wp_user_roles'), ['allowed_classes' => false]);
 $rd = @unserialize((string) $opt($D, 'wp_user_roles'), ['allowed_classes' => false]);
-$rolesOk = is_array($rb) && is_array($rd) && array_diff_key($rd, $rb) == array_intersect_key($rd, array_flip($groups)) && array_intersect_key($rd, $rb) == $rb;
+$rolesOk = is_array($rb) && is_array($rd) && !array_diff_key(array_diff_key($rd, $rb), array_flip($groups)) && array_intersect_key($rd, $rb) == $rb; // added roles are a subset of the group roles (none when the baseline already has them)
 $other = array_values(array_diff($optDiff, ['wp_user_roles']));
 $runtime = '/^(recovery_keys|external_updates-.*|wc_.*_notice.*|woocommerce_admin_notices|action_scheduler_migration_status|wc_blocks_db_schema_version|woocommerce_.*_hpos_.*|_wc_.*)$/';
 // An option re-saved by plugin code with byte-different but identical data (e.g. Freemius re-serializing

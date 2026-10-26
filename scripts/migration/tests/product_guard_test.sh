@@ -5,7 +5,7 @@
 #   scripts/migration/tests/product_guard_test.sh [source_db]
 set -u
 cd "$(dirname "$0")/../../.."
-SRC=${1:-dd_rh_src_prod_20261019}; G=dd_rh_test_guard; B=dd_rh_test_base_oct19
+SRC=${1:-dd_rh_src_prod_20261019}; G=dd_rh_test_guard; B=${BASE:-dd_rh_test_base_oct19}
 fails=0; t() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails+1)); fi; }
 C=dermadirect20uk-db-1; sql() { docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -N "$@"' sh "$@"; }
 R=./scripts/migration/run.sh

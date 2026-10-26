@@ -5,7 +5,7 @@
 #   scripts/deploy/tests/drift_guard_test.sh
 set -u
 cd "$(dirname "$0")/../../.."
-B=dd_rh_test_base_oct19; F=dd_rh_test_drift
+B=${BASE:-dd_rh_test_base_oct19}; F=dd_rh_test_drift
 fails=0; t() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails+1)); fi; }
 C=dermadirect20uk-db-1; sql() { docker exec -i "$C" sh -c 'mariadb -uroot -p"$MYSQL_ROOT_PASSWORD" -N "$@"' sh "$@"; }
 # test container only: the wordpress:cli client requires TLS that the local MariaDB lacks; the simulator's
