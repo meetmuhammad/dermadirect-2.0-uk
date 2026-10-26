@@ -22,7 +22,7 @@ lock()   { remote "mkdir -p '$PRIV' && mkdir '$PRIV/lock' 2>/dev/null && echo '$
 unlock() { remote "rm -rf '$PRIV/lock'" || true; }
 
 # Paths on the server that a code deploy must never modify or delete.
-PROTECT="--filter=P_/.env* --filter=P_/.git/ --filter=P_/web/app/uploads/ --filter=P_/web/app/cache/ --filter=P_/web/app/plugins/ --filter=P_/web/app/upgrade/ --filter=P_/web/.htaccess --filter=P_/web/app/mu-plugins/000-local-safety.php --filter=P_/web/app/mu-plugins/000-dd-qa-sandbox.php --filter=P_/logs/ --filter=P_/web/app/wflogs/"
+PROTECT="--filter=P_/.env* --filter=P_/.git/*** --filter=P_/web/app/uploads/*** --filter=P_/web/app/cache/*** --filter=P_/web/app/plugins/*** --filter=P_/web/app/upgrade/*** --filter=P_/web/.htaccess --filter=P_/web/app/mu-plugins/000-local-safety.php --filter=P_/web/app/mu-plugins/000-dd-qa-sandbox.php --filter=P_/logs/*** --filter=P_/web/app/wflogs/***"
 
 case "$ACTION" in
 code)

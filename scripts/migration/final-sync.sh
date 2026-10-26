@@ -166,7 +166,7 @@ upload)
   shasum -a 256 -c "$DIR/source-lgcy.sql.gz.sha256" >/dev/null
   $SSH "mkdir -p '$RD/reports' && chmod 700 '$PRIV'"
   scp -q -P "$KINSTA_REVIEW_PORT" "$DIR/source-lgcy.sql.gz" "$DIR/source-lgcy.sql.gz.sha256" "$KINSTA_REVIEW_SSH:$RD/"
-  $SSH "cd '$RD' && sha256sum -c source-lgcy.sql.gz.sha256 && cd '$R' && gunzip -c '$RD/source-lgcy.sql.gz' | wp db import - && wp db query --skip-column-names \"SELECT k,v FROM ${PFX}dd_snapshot\"" ;;
+  $SSH "cd '$RD' && sed 's#  .*/#  #' source-lgcy.sql.gz.sha256 | sha256sum -c - && cd '$R' && gunzip -c '$RD/source-lgcy.sql.gz' | wp db import - && wp db query --skip-column-names \"SELECT k,v FROM ${PFX}dd_snapshot\"" ;;
 preflight)
   run headroom.php check $SRCARGS
   run renumber.php audit $SRCARGS ${ISOLATE:+--skip-products}   # products are never relocated
