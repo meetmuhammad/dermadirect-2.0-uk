@@ -132,6 +132,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 params.append('action', 'load_more_products');
                 params.append('page', page);
                 params.append('sort', sort);
+                params.append('search', new URLSearchParams(window.location.search).get('s') || '');
                 params.append('nonce', ajax_obj.nonce);
 
                 // Add category context if on category page

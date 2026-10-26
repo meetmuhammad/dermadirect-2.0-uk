@@ -475,3 +475,8 @@ tr.cart_item.ddce-updating {
 	line-height: 1;
 	color: #000;
 }
+
+/* The full cart already exposes checkout; its floating drawer tab obscures totals. */
+body.woocommerce-cart #open_minicart {
+    display: none !important;
+}

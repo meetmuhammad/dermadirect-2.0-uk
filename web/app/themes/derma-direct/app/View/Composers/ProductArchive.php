@@ -258,6 +258,7 @@ class ProductArchive extends Composer
             'paged'            => 1,
             'per_page'         => 12,
             'sort'             => '',
+            'search'           => '',
             'categories'       => [],
             'brands'           => [],
             'treatment_areas'  => [],
@@ -282,6 +283,11 @@ class ProductArchive extends Composer
             'paged'          => $paged,
             'post_status'    => 'publish',
         ];
+
+        $search = sanitize_text_field((string) $params['search']);
+        if ($search !== '') {
+            $args['s'] = $search;
+        }
 
         // Apply sorting
         $sort_tax_query = [];
@@ -575,6 +581,7 @@ class ProductArchive extends Composer
         $params = [
             'paged'    => $paged,
             'per_page' => $per_page,
+            'search'   => is_search() ? get_search_query(false) : '',
         ];
 
         // Category context
