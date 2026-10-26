@@ -48,7 +48,8 @@ if [ -n "$HOSTED" ]; then
   hwp() { $SSH "cd '$R' && wp $*"; }
 fi
 case "$CMD" in snapshot|pull-dest|upload) ;; *) [ -n "$HOSTED" ] || [ -n "$DEST" ] || { echo "$CMD needs an explicit --dest=<db> (or --hosted)"; exit 2; };; esac
-SRCARGS="--src=${HOSTED:+$DEST}${HOSTED:-$SRCDB} --src-prefix=$PFX --dest=$DEST"
+if [ -n "$HOSTED" ]; then SRCNAME=$DEST; else SRCNAME=$SRCDB; fi   # hosted: the lgcy_ tables live in the site DB
+SRCARGS="--src=$SRCNAME --src-prefix=$PFX --dest=$DEST"
 # Commerce values are copied byte for byte (profile verbatim) unless another profile is named explicitly.
 SYNCARGS="$SRCARGS --profile=$PROFILE $ISOLATE"
 run() { # tool args... (local: docker runner; hosted: php over SSH)
