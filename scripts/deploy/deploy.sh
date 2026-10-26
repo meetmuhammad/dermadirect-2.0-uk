@@ -38,6 +38,7 @@ code)
   remote "mkdir -p '$PRIV/releases' && cd '$ROOT' && tar --exclude=./web/app/uploads --exclude=./.git --exclude=./web/app/cache -czf '$PRIV/releases/code-$TS.tar.gz' . && cp REVISION '$PRIV/releases/code-$TS.revision' 2>/dev/null || true; ls -1t '$PRIV'/releases/code-*.tar.gz | tail -n +6 | xargs rm -f"
   echo "== sync artifact (protected paths untouched)"
   STAGE=$(mktemp -d); tar -xzf "$ART" -C "$STAGE"
+  chmod 755 "$STAGE"   # rsync -a copies the stage root mode onto the server root; mktemp -d is 0700, which made nginx unable to read the site
   # Composer-installed plugins are copied/updated; server-only plugins are never deleted (P filter).
   rsync -a --delete --checksum $PROTECT ${RSH:+-e "$RSH"} "$STAGE/" "$DEST/"
   rm -rf "$STAGE"
