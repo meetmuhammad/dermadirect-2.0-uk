@@ -23,6 +23,9 @@ class PackingSlipManager
 
         // Auto-print on order status change
         add_action('woocommerce_order_status_shipped', [self::class, 'autoPrintOnShipped']);
+
+        // Stream packing slip PDF to authorised admins
+        add_action('admin_post_dd_packing_slip', [self::class, 'streamPdf']);
     }
 
     /**
@@ -62,27 +65,18 @@ class PackingSlipManager
             ? $post_or_order->get_id()
             : $post_or_order->ID;
 
-        if (!$order_id) {
-            echo '<p>' . esc_html__('Create order first', 'derma-direct') . '</p>';
+        $order = $order_id ? wc_get_order($order_id) : false;
+        $is_auto_draft_post = $post_or_order instanceof \WP_Post && $post_or_order->post_status === 'auto-draft';
+
+        if (!$order || $is_auto_draft_post || self::isDraft($order)) {
+            echo '<p>' . esc_html__('Save the order first to view the packing slip.', 'derma-direct') . '</p>';
             return;
         }
 
-        // Ensure directory exists
-        $upload_dir = wp_upload_dir();
-        $directory = $upload_dir['basedir'] . '/packing-slips';
-
-        if (!is_dir($directory)) {
-            wp_mkdir_p($directory);
-        }
-
-        // Generate PDF if it doesn't exist
-        $pdf_file = $directory . '/' . $order_id . '.pdf';
-        if (!file_exists($pdf_file)) {
-            self::createPdf($order_id, $pdf_file);
-        }
-
-        // Display view button
-        $pdf_url = $upload_dir['baseurl'] . '/packing-slips/' . $order_id . '.pdf';
+        $pdf_url = wp_nonce_url(
+            add_query_arg(['action' => 'dd_packing_slip', 'order_id' => $order_id], admin_url('admin-post.php')),
+            'dd_packing_slip_' . $order_id
+        );
         ?>
         <p>
             <a href="<?php echo esc_url($pdf_url); ?>" class="button button-primary" target="_blank">
@@ -90,22 +84,78 @@ class PackingSlipManager
                 <?php echo esc_html__('View Packing Slip', 'derma-direct'); ?>
             </a>
         </p>
-        <p>
-            <a href="<?php echo esc_url(add_query_arg('regenerate_packing_slip', $order_id)); ?>" class="button">
-                <span class="dashicons dashicons-update" style="vertical-align: middle;"></span>
-                <?php echo esc_html__('Regenerate', 'derma-direct'); ?>
-            </a>
-        </p>
         <p class="description">
-            <?php echo esc_html__('Use Regenerate to create a fresh PDF after modifying order details, updating the template design, or fixing any PDF issues.', 'derma-direct'); ?>
+            <?php echo esc_html__('The packing slip is generated fresh from the saved order each time it is opened.', 'derma-direct'); ?>
         </p>
         <?php
+    }
 
-        // Handle regeneration
-        if (isset($_GET['regenerate_packing_slip']) && $_GET['regenerate_packing_slip'] == $order_id) {
-            self::createPdf($order_id, $pdf_file);
-            echo '<div class="notice notice-success inline"><p>' . esc_html__('Packing slip regenerated.', 'derma-direct') . '</p></div>';
+    /**
+     * Stream packing slip PDF for an order (admin-post handler)
+     */
+    public static function streamPdf(): void
+    {
+        if (!current_user_can('edit_shop_orders') && !current_user_can('manage_woocommerce')) {
+            wp_die(esc_html__('You are not allowed to view packing slips.', 'derma-direct'), '', ['response' => 403]);
         }
+
+        $order_id = absint($_GET['order_id'] ?? 0);
+
+        if (!wp_verify_nonce(sanitize_text_field(wp_unslash($_GET['_wpnonce'] ?? '')), 'dd_packing_slip_' . $order_id)) {
+            wp_die(esc_html__('Invalid or expired link.', 'derma-direct'), '', ['response' => 403]);
+        }
+
+        $order = $order_id ? wc_get_order($order_id) : false;
+
+        if (!$order) {
+            wp_die(esc_html__('Order not found.', 'derma-direct'), '', ['response' => 404]);
+        }
+
+        if (self::isDraft($order)) {
+            wp_die(esc_html__('Save the order first to view the packing slip.', 'derma-direct'), '', ['response' => 400]);
+        }
+
+        $bytes = self::renderPdf($order);
+
+        nocache_headers();
+        header('Content-Type: application/pdf');
+        header('Content-Disposition: inline; filename="packing-slip-' . $order_id . '.pdf"');
+        header('X-Robots-Tag: noindex, nofollow');
+        echo $bytes;
+        exit;
+    }
+
+    /**
+     * Whether the order is an unsaved or draft order
+     *
+     * @param \WC_Order $order Order object
+     */
+    private static function isDraft($order): bool
+    {
+        return in_array($order->get_status(), ['auto-draft', 'draft', 'checkout-draft'], true);
+    }
+
+    /**
+     * Render packing slip PDF bytes
+     *
+     * @param \WC_Order $order Order object
+     */
+    private static function renderPdf(\WC_Order $order): string
+    {
+        // Initialize Dompdf
+        $pdf = new Dompdf(['enable_remote' => true]);
+
+        // Generate HTML
+        ob_start();
+        self::renderPdfHtml($order);
+        $html = ob_get_clean();
+
+        // Create PDF
+        $pdf->loadHtml($html);
+        $pdf->setPaper('A4', 'portrait');
+        $pdf->render();
+
+        return (string) $pdf->output();
     }
 
     /**
@@ -122,21 +172,7 @@ class PackingSlipManager
             return;
         }
 
-        // Initialize Dompdf
-        $pdf = new Dompdf(['enable_remote' => true]);
-
-        // Generate HTML
-        ob_start();
-        self::renderPdfHtml($order);
-        $html = ob_get_clean();
-
-        // Create PDF
-        $pdf->loadHtml($html);
-        $pdf->setPaper('A4', 'portrait');
-        $pdf->render();
-
-        // Save PDF
-        file_put_contents($pdf_file, $pdf->output());
+        file_put_contents($pdf_file, self::renderPdf($order));
     }
 
     /**
@@ -205,7 +241,7 @@ class PackingSlipManager
 
             <div class="order-info">
                 <strong>Order No: <?php echo esc_html($order->get_order_number()); ?></strong><br>
-                Date: <?php echo esc_html(date('d/m/Y', strtotime($order->get_date_created()))); ?>
+                Date: <?php echo esc_html($order->get_date_created() ? $order->get_date_created()->date_i18n('d/m/Y') : ''); ?>
             </div>
 
             <table class="address-table">
@@ -298,22 +334,16 @@ class PackingSlipManager
             return;
         }
 
-        // Ensure PDF exists
-        $upload_dir = wp_upload_dir();
-        $directory = $upload_dir['basedir'] . '/packing-slips';
+        $order = wc_get_order($order_id);
 
-        if (!is_dir($directory)) {
-            wp_mkdir_p($directory);
+        if (!$order) {
+            return;
         }
 
-        $pdf_file = $directory . '/' . $order_id . '.pdf';
-        if (!file_exists($pdf_file)) {
-            self::createPdf($order_id, $pdf_file);
-        }
+        // Render a fresh PDF from the current order data
+        $bytes = self::renderPdf($order);
 
         // Send to printer via PrintNode API
-        $pdf_url = $upload_dir['baseurl'] . '/packing-slips/' . $order_id . '.pdf';
-
         $response = wp_remote_post('https://api.printnode.com/printjobs', [
             'headers' => [
                 'Authorization' => 'Basic ' . base64_encode($api_key . ':'),
@@ -321,8 +351,8 @@ class PackingSlipManager
             ],
             'body' => wp_json_encode([
                 'printerId'   => (int) $printer_id,
-                'contentType' => 'pdf_uri',
-                'content'     => $pdf_url,
+                'contentType' => 'pdf_base64',
+                'content'     => base64_encode($bytes),
                 'title'       => 'Packing Slip - Order #' . $order_id,
             ]),
         ]);
@@ -330,6 +360,12 @@ class PackingSlipManager
         // Log errors if any
         if (is_wp_error($response)) {
             error_log('PrintNode API Error: ' . $response->get_error_message());
+            return;
+        }
+
+        $code = (int) wp_remote_retrieve_response_code($response);
+        if ($code < 200 || $code >= 300) {
+            error_log('PrintNode API Error: HTTP ' . $code . ' for order #' . $order_id . ' - ' . substr((string) wp_remote_retrieve_body($response), 0, 200));
         }
     }
 }
