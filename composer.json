@@ -73,7 +73,7 @@
     "wpackagist-plugin/wt-smart-coupons-for-woocommerce": "^2.2",
     "wpackagist-plugin/woocommerce-stock-manager": "^3.7",
     "wpackagist-plugin/trackship-for-woocommerce": "^2.0.1",
-    "wpackagist-plugin/print-invoices-packing-slip-labels-for-woocommerce": "^4.9",
+    "wpackagist-plugin/print-invoices-packing-slip-labels-for-woocommerce": "5.0.1",
     "wpackagist-plugin/woocommerce-gateway-stripe": "^10.4",
     "wpackagist-plugin/generateblocks": "^2.2",
     "wpackagist-plugin/woo-advanced-shipment-tracking": "^4.0",
