@@ -376,6 +376,75 @@ shred -u ~/dd-print-pick-backup/*.json 2>/dev/null || rm -f ~/dd-print-pick-back
 rmdir ~/dd-print-pick-backup
 ```
 
+## Go-live checklist for the warehouse test on 2.0
+
+Run on 2.0 over SSH from `~/public` once the warehouse lead has sent (a) the warehouse PrintNode
+printer id, (b) the PrintNode API key for the account that owns that printer, and (c) the
+Shiptheory TEST account details. Production is never touched.
+
+**Before starting (should already be true):**
+
+- `wp dd safety | grep -E '^(Harness|WP_ENV|Allowed)'` shows Harness ACTIVE, WP_ENV staging, and
+  Allowed includes `api.printnode.com` and `quark.madcapsule.com`. Do not change the harness.
+  Print only those lines; the blocked table can contain URLs with tokens.
+- `wp plugin list --status=active` includes woocommerce-pickingpal-pro, flexible-printing,
+  print-invoices-packing-slip-labels-for-woocommerce (5.0.1), wt-woocommerce-invoice-addon and
+  wt-woocommerce-packing-list-printnode.
+- Shiptheory webhook 19 (points at the LIVE Shiptheory account) is paused and stays paused.
+- WebToffee remote print (its own PrintNode add-on) stays off: automatic and manual both "No",
+  no API key. Packing slips on 2.0 print only through the theme Packing Slip manager.
+
+**A. Printer and PrintNode key** (needs: printer id, PrintNode key, approval to print to the
+warehouse)
+
+1. Tell the warehouse team the time window.
+2. Follow [Printing to the real warehouse printer (approved testing mode)](#printing-to-the-real-warehouse-printer-approved-testing-mode)
+   steps 2 to 6: both flags in `~/public/.env`, key via the hidden prompt, printer id,
+   auto-print on.
+3. Check the flags; this must print two `bool(true)`:
+   ```sh
+   wp eval 'var_dump(defined("DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS") && DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS, defined("DD_PACKING_SLIP_PRINT_ALL_ORDERS") && DD_PACKING_SLIP_PRINT_ALL_ORDERS);'
+   ```
+   The Packaging Labels settings screen must show no red "will not print" notice.
+4. Never print the API key. Check it is set with
+   `wp option get packaging_labels_printnode_api_key >/dev/null && echo set`.
+5. Test with one order: move a paid test order to **Ship**, confirm exactly one slip printed and
+   the order has `_dd_packing_slip_printed`.
+
+**B. Shiptheory test account** (needs: the test account login; the warehouse lead owns that
+account)
+
+1. In the Shiptheory TEST account, add a WooCommerce channel for
+   https://dermadirect20uk.kinsta.cloud. If it asks for WooCommerce REST API keys, create them on
+   2.0 under WooCommerce > Settings > Advanced > REST API for an admin user, Read/Write,
+   description "Shiptheory TEST". Paste them only into Shiptheory, never into chat, tickets or
+   files.
+2. Shiptheory then creates its own webhook on 2.0. List webhooks without printing URLs, then
+   compare a short hash of each delivery URL (it can contain account identifiers):
+   ```sh
+   wp wc webhook list --user=<admin id> --fields=id,name,status
+   wp wc webhook get <id> --user=<admin id> --field=delivery_url | sha256sum | cut -c1-12
+   wp wc webhook get <id> --user=<admin id> --field=delivery_url | awk -F/ '{print $3}'
+   ```
+   The new webhook must be active and its hash must differ from webhook 19's. The last command
+   prints only the host. If it is not `quark.madcapsule.com`, add that exact host to
+   `DD_SAFETY_ALLOW_HOSTS` only with approval.
+3. Leave webhook 19 paused. Do not delete it without approval.
+4. Test with one order moved to **Ship**: it appears in the Shiptheory TEST account, not the live
+   one.
+
+**C. PickingPal**
+
+- Already licensed on 2.0 (second seat). Never press Deactivate on 2.0; that frees or burns the
+  seat. Test flow: Ship, Completed, Pending Pick, scan in PickingPal, Picked, Completed.
+
+**Rollback (end of test)**
+
+1. Auto-print off and both flags removed (see that section's [Rollback](#rollback-1)).
+2. Pause the Shiptheory TEST webhook.
+3. Revoke the "Shiptheory TEST" REST API key.
+4. Tell the warehouse team testing is over.
+
 ## Out of scope
 
 - The Shiptheory webhook stays paused.
