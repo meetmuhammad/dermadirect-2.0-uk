@@ -134,16 +134,17 @@ add_filter('pre_wp_mail', function ($null, $atts) {
  * Note: it filters the settings in memory only. Nothing is written to the database,
  * so the real credentials survive intact for cutover.
  * ---------------------------------------------------------------------- */
-foreach (['woocommerce_stripe_settings', 'woocommerce_stripe_cc_settings', 'woocommerce_stripe_api_settings'] as $option) {
+foreach (['woocommerce_stripe_settings', 'woocommerce_stripe_cc_settings', 'woocommerce_stripe_api_settings', 'woocommerce_superpayments_settings'] as $option) {
     add_filter("option_{$option}", function ($value) {
         if (!is_array($value)) {
             return $value;
         }
 
-        $value['testmode'] = 'yes';
+        $value['testmode']  = 'yes';
+        $value['test_mode'] = 'yes'; // Super Payments uses test_mode
         $value['enabled']  = $value['enabled'] ?? 'no';
 
-        foreach (['secret_key', 'publishable_key', 'webhook_secret'] as $key) {
+        foreach (['secret_key', 'publishable_key', 'webhook_secret', 'api_key', 'signing_key', 'publishable_api_key'] as $key) {
             if (isset($value[$key])) {
                 $value[$key] = '';
             }
@@ -164,6 +165,14 @@ foreach (['woocommerce_stripe_settings', 'woocommerce_stripe_cc_settings', 'wooc
  * intact for inspection and for cutover.
  * ---------------------------------------------------------------------- */
 add_filter('action_scheduler_run_queue', '__return_false', PHP_INT_MAX);
+
+// DISABLE_WP_CRON only stops page loads from spawning cron; a direct request to wp-cron.php (Kinsta's
+// server cron does exactly that) still runs every due event, including Action Scheduler's queue
+// cleaner. While the harness is active, report no due events so wp-cron.php runs nothing.
+add_filter('pre_get_ready_cron_jobs', static function ($pre) {
+    record('cron', 'wp-cron.php request: due events suppressed');
+    return [];
+}, PHP_INT_MAX);
 add_filter('action_scheduler_allow_async_request_runner', '__return_false', PHP_INT_MAX);
 add_filter('pre_option_woocommerce_queue_flush_rewrite_rules', '__return_false');
 

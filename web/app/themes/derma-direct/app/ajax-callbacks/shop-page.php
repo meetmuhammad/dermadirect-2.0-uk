@@ -20,6 +20,7 @@ function load_more_products() {
         'paged'             => absint($_POST['page'] ?? 1),
         'per_page'          => 12,
         'sort'              => $sort,
+        'search'            => sanitize_text_field(wp_unslash($_POST['search'] ?? '')),
         'categories'        => isset($_POST['categories']) ? array_map('sanitize_text_field', (array) $_POST['categories']) : [],
         'brands'            => isset($_POST['brands']) ? array_map('sanitize_text_field', (array) $_POST['brands']) : [],
         'treatment_areas'   => isset($_POST['treatment_areas']) ? array_map('sanitize_text_field', (array) $_POST['treatment_areas']) : [],

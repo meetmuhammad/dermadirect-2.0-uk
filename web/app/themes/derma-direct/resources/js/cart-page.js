@@ -88,13 +88,9 @@ jQuery(function ($) {
                     .html(data.line_subtotal);
             }
 
-            $('.cart-subtotal td')
-                .last()
-                .html(data.cart_subtotal);
-
-            $('.order-total td')
-                .last()
-                .html(data.cart_total);
+            if (data.cart_totals_html) {
+                $('.cart_totals').first().replaceWith(data.cart_totals_html);
+            }
 
             renderFreeDeliveryBar(data.cart_total_raw);
             $(document.body).trigger('wc_fragment_refresh');

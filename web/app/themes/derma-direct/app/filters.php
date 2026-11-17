@@ -638,3 +638,23 @@ add_filter('wp_check_filetype_and_ext', function ($data, $file, $filename, $mime
  * @see migration/reports/code-snippet-parity.md
  */
 add_filter('woocommerce_ship_to_different_address_checked', '__return_false');
+
+/**
+ * Variable products: a variation attribute with exactly one option and no stored default is pre-selected.
+ *
+ * Some variable products carry a second variation attribute with a single term that no variation pins (e.g.
+ * "Accessories: Gloves" on the nitrile gloves), which WooCommerce otherwise forces shoppers to choose before
+ * "Add to cart" works. Catalogue data (attributes, defaults, variations) is not changed.
+ */
+add_filter('woocommerce_product_get_default_attributes', function ($defaults, $product) {
+    if (is_admin() || !$product->is_type('variable')) {
+        return $defaults;
+    }
+    foreach ($product->get_variation_attributes() as $name => $options) {
+        $key = sanitize_title($name);
+        if (empty($defaults[$key]) && count($options) === 1) {
+            $defaults[$key] = reset($options);
+        }
+    }
+    return $defaults;
+}, 10, 2);

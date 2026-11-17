@@ -1,0 +1,46 @@
+# Action B — routine CODE deployment to the new Kinsta site. Manual trigger only, protected by the
+# `kinsta-review` environment (configure required reviewers in GitHub). Never imports a database,
+# never runs a commerce sync, never changes DNS or enables integrations. Actions A (initial data
+# transfer) and C (final commerce sync) are operator-run from the prepared Mac (they need private
+# local data) via scripts/deploy/deploy.sh — they are intentionally not available here.
+name: deploy-code
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref (commit/tag) to deploy'
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: dd-deploy-kinsta
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment: kinsta-review
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: '${{ inputs.ref }}', fetch-depth: 0 }
+      - uses: shivammathur/setup-php@v2
+        with: { php-version: '8.3', tools: composer:v2, coverage: none }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: scripts/deploy/checks.sh
+      - run: scripts/deploy/build.sh '${{ inputs.ref }}' dist
+      - name: SSH key (masked; never echoed)
+        env:
+          KEY: ${{ secrets.KINSTA_SSH_KEY }}
+          KNOWN: ${{ secrets.KINSTA_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN" > ~/.ssh/known_hosts
+      - name: Deploy code
+        env:
+          KINSTA_REVIEW_SSH: ${{ secrets.KINSTA_REVIEW_SSH }}
+          KINSTA_REVIEW_PORT: ${{ secrets.KINSTA_REVIEW_PORT }}
+          KINSTA_REVIEW_ROOT: ${{ secrets.KINSTA_REVIEW_ROOT }}
+          KINSTA_REVIEW_PRIVATE: ${{ secrets.KINSTA_REVIEW_PRIVATE }}
+          KINSTA_REVIEW_URL: ${{ vars.KINSTA_REVIEW_URL }}
+        run: scripts/deploy/deploy.sh code kinsta-review dist/dd-code-*.tar.gz

@@ -1,0 +1,77 @@
+<?php
+/**
+ * Plugin Name: Local Safety (DermaDirect local copy)
+ *
+ * LOCAL DEVELOPMENT ONLY — do not deploy to any live environment.
+ *
+ * After importing the site snapshot, copy this file (dropping the .example suffix) into
+ * web/app/mu-plugins/ so it loads automatically as a must-use plugin. It prevents a database
+ * copied from production from triggering live side effects: scheduled jobs, outbound webhooks,
+ * marketing/transactional email, or update pings to wordpress.org.
+ */
+
+// Safe by default: only an explicit "false" in .env turns these off. Any other value
+// (unset, "true", typo, etc.) keeps the local-safety behaviour enabled.
+if (! defined('DISABLE_WP_CRON')) {
+    define('DISABLE_WP_CRON', getenv('DISABLE_WP_CRON') !== 'false');
+}
+
+if (! defined('ACTION_SCHEDULER_DISABLE_CLOCK')) {
+    define('ACTION_SCHEDULER_DISABLE_CLOCK', getenv('ACTION_SCHEDULER_DISABLE_CLOCK') !== 'false');
+}
+
+// Belt-and-braces in case a plugin bypasses the constant above.
+add_filter('action_scheduler_queue_runner_batch_size', '__return_zero');
+add_filter('action_scheduler_run_queue', '__return_false');
+
+// Route all outgoing mail through Mailpit instead of a real mail transport.
+add_action('phpmailer_init', function ($phpmailer) {
+    $phpmailer->isSMTP();
+    $phpmailer->Host = getenv('SMTP_HOST') ?: 'mailpit';
+    $phpmailer->Port = getenv('SMTP_PORT') ?: 1025;
+    $phpmailer->SMTPAuth = false;
+    $phpmailer->SMTPAutoTLS = false;
+    $phpmailer->From = getenv('SMTP_FROM') ?: 'local@dermadirect.test';
+    $phpmailer->FromName = getenv('SMTP_FROM_NAME') ?: 'DermaDirect Local';
+});
+
+// Defense in depth: block outbound HTTP requests to anything that isn't this local stack,
+// even though the Docker network already prevents egress at the container level.
+if (getenv('BLOCK_EXTERNAL_HTTP') !== 'false') {
+    add_filter('pre_http_request', function ($preempt, $parsed_args, $url) {
+        $host = parse_url($url, PHP_URL_HOST);
+        $allowed = ['mailpit', 'localhost', '127.0.0.1', $_SERVER['HTTP_HOST'] ?? ''];
+
+        if (in_array($host, $allowed, true)) {
+            return $preempt;
+        }
+
+        return new WP_Error(
+            'local_egress_blocked',
+            sprintf('Blocked outbound request to "%s" from local DermaDirect copy.', $host)
+        );
+    }, 10, 3);
+}
+
+// Stop core/plugin/theme update checks from phoning home to wordpress.org.
+add_filter('pre_site_transient_update_core', '__return_null');
+add_filter('pre_site_transient_update_plugins', '__return_null');
+add_filter('pre_site_transient_update_themes', '__return_null');
+
+// Local-only: use the pinned local Swiper copy instead of the production CDN.
+add_action('wp_enqueue_scripts', function () {
+    wp_dequeue_style('swiper-css');
+    wp_deregister_style('swiper-css');
+    wp_enqueue_style('dd-local-swiper-css', get_theme_file_uri('resources/css/vendor/swiper-bundle.min.css'), [], '11.0.5');
+    wp_dequeue_script('swiper-js');
+    wp_deregister_script('swiper-js');
+    wp_enqueue_script('dd-local-swiper-js', get_theme_file_uri('resources/js/vendor/swiper-bundle.min.js'), [], '11.0.5', true);
+}, 100);
+
+// Local-only: do not load Contact Form 7 reCAPTCHA, which would call Google from the browser.
+add_action('wp_enqueue_scripts', function () {
+    wp_dequeue_script('wpcf7-recaptcha');
+    wp_deregister_script('wpcf7-recaptcha');
+    wp_dequeue_script('google-recaptcha');
+    wp_deregister_script('google-recaptcha');
+}, 100);

@@ -26,3 +26,32 @@ web/wp/
 .DS_Store
 .idea/
 .vscode/
+
+# Evidence logs (scripts/search-replace.sh, scripts/verify.sh) — local-only records
+logs/
+
+.host-proxy.pid
+secrets/
+.browser-profile*/
+recovery/*.sql.gz
+source-snapshot/
+repository-reference/migration-audit/
+
+# Migration rehearsal reports (may contain record IDs) and dumps
+migration-reports/
+recovery/
+.auth-browser-profile*/
+
+# Local-only mu-plugins and rehearsal files (never deployed)
+web/app/mu-plugins/000-local-safety.php
+
+# Deployment targets (host/port) and private packages
+.deploy-targets
+
+# Private operational documents (the GitHub repository is public). Keep local or in a private repo.
+docs/migration/
+CICD-READINESS.md
+PLUGIN-MANAGEMENT-AUDIT.md
+PLUGIN-MANAGEMENT-INVENTORY.csv
+VERIFICATION-REPORT.md
+web/.htaccess

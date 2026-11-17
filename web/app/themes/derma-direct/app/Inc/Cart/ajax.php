@@ -19,7 +19,8 @@ function ddce_ajax_update_qty() {
         $cart->calculate_totals();
         wp_send_json_success(
             array(
-                'cart_subtotal'  => wc_price( $cart->get_subtotal() ),
+                'cart_totals_html' => ddce_render_cart_totals(),
+            'cart_subtotal'  => $cart->get_cart_subtotal(),
                 'cart_total'     => wc_price( $cart->get_total( 'edit' ) ),
                 'cart_total_raw' => (float) $cart->get_cart_contents_total(),
                 'cart_is_empty'  => $cart->is_empty(),
@@ -64,7 +65,8 @@ function ddce_ajax_update_qty() {
     wp_send_json_success(
         array(
             'line_subtotal'  => $line_subtotal,
-            'cart_subtotal'  => wc_price( $cart->get_subtotal() ),
+            'cart_totals_html' => ddce_render_cart_totals(),
+            'cart_subtotal'  => $cart->get_cart_subtotal(),
             'cart_total'     => wc_price( $cart->get_total( 'edit' ) ),
             'cart_total_raw' => (float) $cart->get_cart_contents_total(),
             'cart_is_empty'  => $cart->is_empty(),
@@ -73,3 +75,9 @@ function ddce_ajax_update_qty() {
 }
 add_action( 'wp_ajax_ddce_update_qty', 'ddce_ajax_update_qty' );
 add_action( 'wp_ajax_nopriv_ddce_update_qty', 'ddce_ajax_update_qty' );
+// Return the same complete totals markup as a fresh cart page, including tax rows.
+function ddce_render_cart_totals(): string {
+    ob_start();
+    woocommerce_cart_totals();
+    return (string) ob_get_clean();
+}

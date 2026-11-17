@@ -1,0 +1,21 @@
+# Checks only. Never deploys, never touches a database, never needs secrets.
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  checks-and-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with: { php-version: '8.3', tools: composer:v2, coverage: none }
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - run: scripts/deploy/checks.sh
+      - run: scripts/deploy/build.sh HEAD dist
+      - uses: actions/upload-artifact@v4
+        with: { name: code-artifact, path: dist/, retention-days: 7 }

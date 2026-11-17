@@ -156,8 +156,8 @@
                 {!! wp_kses_post($next_day_delivery_timer_banner) !!}
             @endunless
 
-            {{-- Quantity Selector --}}
-            @if ($product->is_in_stock())
+            {{-- Quantity Selector (variable products use the WooCommerce variations form below, which has its own) --}}
+            @if ($product->is_in_stock() && ! $product->is_type('variable'))
                 <div id="dd-qty-wrapper" class="flex items-center gap-3">
                     <span class="text-sm font-quicksand font-semibold text-[#272727]">
                         {{ __('Quantity', 'sage') }}
@@ -183,6 +183,12 @@
                 </div>
             @endif
 
+            {{-- Variable products: standard size/option selector + add to cart (the loop link below only points back at this page) --}}
+            @if ($product->is_type('variable'))
+                <div id="dd-variations-wrapper" class="mt-4">
+                    @php(woocommerce_variable_add_to_cart())
+                </div>
+            @else
             {{-- Add to cart button --}}
             <div id="dd-atc-wrapper" class="[&_.added_to_cart]:!hidden grid grid-cols-1 md:grid-cols-2 gap-2">
                 @if ($product->is_in_stock())
@@ -215,6 +221,7 @@
                     </button>
                 @endif
             </div>
+            @endif
 
             @unless (empty($punch_line_after_atc ?? ''))
                 <div class="flex gap-2 items-center text-sm md:text-base text-[#272727] font-quicksand">
