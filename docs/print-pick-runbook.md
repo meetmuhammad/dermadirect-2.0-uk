@@ -23,14 +23,17 @@ If `siteurl` is not the 2.0 staging URL, stop.
   A successful print is stored in order meta `_dd_packing_slip_printed` and never repeated.
 - On non-production only:
   - only review checkout orders (`_dd_review_order` = `1`) auto-print. Do **not** define
-    `DD_PACKING_SLIP_PRINT_ALL_ORDERS` on 2.0;
+    `DD_PACKING_SLIP_PRINT_ALL_ORDERS` on 2.0 outside the approved testing mode below;
   - printing to the production warehouse printers **74857961, 71895499, 73994577** (with or
-    without a `pn_` prefix) is always refused.
+    without a `pn_` prefix) is refused unless `DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS` is
+    `true` (see "Printing to the real warehouse printer (approved testing mode)" below).
+    Neither flag is set by default, and the steps below assume neither is set.
 
 ## Warnings before you start
 
 - **Never set `DD_SAFETY_HARNESS=off`.** Use `DD_SAFETY_ALLOW_HOSTS` only.
-- **Never use production's PrintNode account, API key or printers on 2.0.**
+- **Never use production's PrintNode account, API key or printers on 2.0**, except in the
+  approved testing mode described near the end of this runbook.
 - **PickingPal: never press Deactivate on 2.0, and never deactivate the 2.0 site from the
   PickingPal account, while 2.0 still holds production's activation instance.** The instance was
   copied with the database, so deactivating it can switch off production's picker.
@@ -302,6 +305,67 @@ Verify `wp dd safety` shows `Allowed:  none (all outbound HTTP blocked)`.
 
 Leave PickingPal activated on its own 2.0 instance. Do not restore production's PickingPal or
 PrintNode values from the backup onto 2.0.
+
+## Printing to the real warehouse printer (approved testing mode)
+
+Only with explicit approval, and only after steps 1 to 7 above work on the test printer. This
+makes 2.0 send packing slips to a real warehouse printer, for every order moved to **Ship**, not
+only review orders. The default path above stays unchanged when these flags are not set.
+
+1. **Tell the warehouse team first.** Agree a time window and which printer to use. Slips that
+   come out of a warehouse printer from 2.0 are test slips and must not be picked or shipped.
+2. Turn auto-print off while configuring:
+   ```sh
+   cd ~/public
+   wp option update packaging_labels_auto_print 0
+   ```
+3. Add both flags to `~/public/.env` (or the Kinsta environment, then restart PHP):
+   ```sh
+   DD_PACKING_SLIP_PRINT_ALL_ORDERS=true
+   DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS=true
+   ```
+   Only the exact value `true` turns a flag on. The flags are independent:
+   `DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS` alone still prints review orders only.
+4. Set the PrintNode API key for the account that holds the warehouse printer, via the prompt so
+   it never appears on the command line or in shell history:
+   ```sh
+   read -rsp 'PrintNode API key: ' PN_KEY; echo
+   printf '%s' "$PN_KEY" | wp option update packaging_labels_printnode_api_key
+   unset PN_KEY
+   ```
+5. Set the printer id to the printer the warehouse names, and check it:
+   ```sh
+   read -rp 'Warehouse printer id: ' PN_PRINTER
+   wp option update packaging_labels_printer_id "$PN_PRINTER"; unset PN_PRINTER
+   wp option get packaging_labels_printer_id
+   ```
+   The red "Packing slips will not print" notice on the Packaging Labels settings screen should
+   be gone. If it is still there, the flag was not picked up.
+6. Turn auto-print on:
+   ```sh
+   wp option update packaging_labels_auto_print 1
+   ```
+
+Each order prints at most once: a successful print is stored in `_dd_packing_slip_printed` and
+moving the same order to **Ship** again does not print it again. Only orders not yet printed
+will print.
+
+### Rollback
+
+```sh
+cd ~/public
+wp option update packaging_labels_auto_print 0
+```
+
+Remove both lines from `~/public/.env` (or the Kinsta environment, then restart PHP):
+
+```sh
+DD_PACKING_SLIP_PRINT_ALL_ORDERS=true
+DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS=true
+```
+
+Then put `packaging_labels_printer_id` and `packaging_labels_printnode_api_key` back to the 2.0
+test account values from step 4, and tell the warehouse team testing is over.
 
 ## Clean up the backup
 

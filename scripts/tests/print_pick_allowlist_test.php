@@ -105,7 +105,39 @@ check('production prints non-review order', PackingSlipManager::autoPrintBlockRe
 check('production prints to warehouse printer', PackingSlipManager::autoPrintBlockReason('production', '74857961', '', false) === null);
 check('production manual print not blocked', PackingSlipManager::printBlockReason('production', 'pn_73994577') === null);
 
-check('unprinted order not printed', !PackingSlipManager::isPrinted(''));
+/* ---------------- Allow production printers flag ---------------- */
+
+check('allow flag off by default', !PackingSlipManager::allowProductionPrinters());
+check('unset constant is not enabled', !PackingSlipManager::flagEnabled('DD_TEST_UNDEFINED_FLAG'));
+define('DD_TEST_STRING_FLAG', 'true');
+check('string "true" constant is not enabled', !PackingSlipManager::flagEnabled('DD_TEST_STRING_FLAG'));
+define('DD_TEST_BOOL_FLAG', true);
+check('boolean true constant is enabled', PackingSlipManager::flagEnabled('DD_TEST_BOOL_FLAG'));
+
+check('deny-list blocks by default (manual)', PackingSlipManager::printBlockReason('staging', '74857961') !== null);
+check('deny-list blocks with allow flag false', PackingSlipManager::printBlockReason('staging', '74857961', false) !== null);
+check('deny-list blocks by default (auto)', PackingSlipManager::autoPrintBlockReason('staging', '74857961', '1', false) !== null);
+
+foreach (['74857961', '71895499', '73994577', 'pn_73994577', 'PN_74857961', ' 71895499 '] as $id) {
+    check("allow flag lets production printer {$id} through on staging", PackingSlipManager::printBlockReason('staging', $id, true) === null);
+    check("allow flag auto-prints review order to {$id} on staging", PackingSlipManager::autoPrintBlockReason('staging', $id, '1', false, true) === null);
+}
+
+check('allow flag lets production printer through when WP_ENV undefined', PackingSlipManager::printBlockReason(null, '74857961', true) === null);
+check('allow flag does not bypass review-order rule', PackingSlipManager::autoPrintBlockReason('staging', '74857961', '', false, true) !== null);
+check('allow flag does not bypass review-order rule for test printer', PackingSlipManager::autoPrintBlockReason('staging', '12345678', '', false, true) !== null);
+check('print-all alone still blocks production printer', PackingSlipManager::autoPrintBlockReason('staging', '74857961', '', true, false) !== null);
+check('both flags print non-review order to production printer', PackingSlipManager::autoPrintBlockReason('staging', '74857961', '', true, true) === null);
+check('both flags print non-review order to pn_ production printer', PackingSlipManager::autoPrintBlockReason('development', 'pn_71895499', '', true, true) === null);
+
+foreach ([[false, false], [true, false], [false, true], [true, true]] as [$all, $allow]) {
+    $label = 'print_all=' . var_export($all, true) . ' allow=' . var_export($allow, true);
+    check("production manual print unaffected ({$label})", PackingSlipManager::printBlockReason('production', '74857961', $allow) === null);
+    check("production prints non-review order to warehouse printer ({$label})", PackingSlipManager::autoPrintBlockReason('production', 'pn_73994577', '', $all, $allow) === null);
+    check("production prints non-review order to test printer ({$label})", PackingSlipManager::autoPrintBlockReason('production', '12345678', '', $all, $allow) === null);
+}
+
+check('unprinted order not printed',!PackingSlipManager::isPrinted(''));
 check('printed meta detected', PackingSlipManager::isPrinted(['time' => '2026-11-18T10:00:00+00:00', 'printer_id' => '12345678']));
 check('empty printed meta not printed', !PackingSlipManager::isPrinted([]));
 

@@ -374,7 +374,8 @@ class PackingSlipManager
             self::currentEnv(),
             $printer_id,
             $order->get_meta(self::REVIEW_ORDER_META),
-            defined('DD_PACKING_SLIP_PRINT_ALL_ORDERS') && DD_PACKING_SLIP_PRINT_ALL_ORDERS === true
+            self::flagEnabled('DD_PACKING_SLIP_PRINT_ALL_ORDERS'),
+            self::allowProductionPrinters()
         );
 
         if ($reason !== null) {
@@ -439,6 +440,23 @@ class PackingSlipManager
     }
 
     /**
+     * Whether an opt-in constant is defined and exactly true
+     */
+    public static function flagEnabled(string $name): bool
+    {
+        return defined($name) && constant($name) === true;
+    }
+
+    /**
+     * Whether DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS lets a non-production site print to the
+     * production warehouse printers. Off unless the constant is exactly true.
+     */
+    public static function allowProductionPrinters(): bool
+    {
+        return self::flagEnabled('DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS');
+    }
+
+    /**
      * Whether the non-production print guards apply. Anything that is not production is
      * guarded, including an undefined WP_ENV.
      */
@@ -475,17 +493,18 @@ class PackingSlipManager
 
     /**
      * Why any print (automatic or manual) to this printer is refused, or null if allowed.
-     * Applies on non-production only; never blocks anything on production.
+     * Applies on non-production only; never blocks anything on production. The production
+     * printer deny-list is lifted only when $allow_production_printers is true.
      *
      * @param mixed $printer_id
      */
-    public static function printBlockReason(?string $env, $printer_id): ?string
+    public static function printBlockReason(?string $env, $printer_id, bool $allow_production_printers = false): ?string
     {
         if (!self::guardsApply($env)) {
             return null;
         }
 
-        if (self::isProductionPrinter($printer_id)) {
+        if (!$allow_production_printers && self::isProductionPrinter($printer_id)) {
             return 'the configured printer is a production warehouse printer and this is not the production site.';
         }
 
@@ -496,14 +515,15 @@ class PackingSlipManager
      * Why an automatic print is refused, or null if allowed.
      *
      * On non-production only review checkout orders print, unless DD_PACKING_SLIP_PRINT_ALL_ORDERS
-     * is true. The production printer deny-list applies regardless of that override.
+     * is true. The production printer deny-list applies regardless of that override, unless
+     * $allow_production_printers is true. The two flags are independent.
      *
      * @param mixed $printer_id
      * @param mixed $review_meta Value of the _dd_review_order order meta
      */
-    public static function autoPrintBlockReason(?string $env, $printer_id, $review_meta, bool $print_all_orders): ?string
+    public static function autoPrintBlockReason(?string $env, $printer_id, $review_meta, bool $print_all_orders, bool $allow_production_printers = false): ?string
     {
-        $reason = self::printBlockReason($env, $printer_id);
+        $reason = self::printBlockReason($env, $printer_id, $allow_production_printers);
 
         if ($reason !== null || !self::guardsApply($env)) {
             return $reason;
