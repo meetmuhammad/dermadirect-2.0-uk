@@ -180,6 +180,17 @@ Config::define('WP_POST_REVISIONS', env('WP_POST_REVISIONS') ?? true);
 Config::define('CONCATENATE_SCRIPTS', false);
 
 /**
+ * Packing slip print overrides (non-production only, see docs/print-pick-runbook.md).
+ * Defined only when the variable is set; any value other than true defines false.
+ */
+foreach (['DD_PACKING_SLIP_PRINT_ALL_ORDERS', 'DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS'] as $dd_print_flag) {
+    if (env($dd_print_flag) !== null) {
+        Config::define($dd_print_flag, env($dd_print_flag) === true);
+    }
+}
+unset($dd_print_flag);
+
+/**
  * Debugging Settings
  */
 Config::define('WP_DEBUG_DISPLAY', false);

@@ -76,8 +76,13 @@ class AdminPage
         $printer_id = get_option('packaging_labels_printer_id', '');
         $auto_print = get_option('packaging_labels_auto_print', '0');
 
-        // Printing to a production warehouse printer is refused on non-production sites
-        $block_reason = PackingSlipManager::printBlockReason(PackingSlipManager::currentEnv(), $printer_id);
+        // Printing to a production warehouse printer is refused on non-production sites unless
+        // DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS is true
+        $block_reason = PackingSlipManager::printBlockReason(
+            PackingSlipManager::currentEnv(),
+            $printer_id,
+            PackingSlipManager::allowProductionPrinters()
+        );
 
         if ($block_reason !== null) {
             echo '<div class="notice notice-error"><p>' . esc_html__('Packing slips will not print:', 'derma-direct') . ' ' . esc_html($block_reason) . '</p></div>';
