@@ -14,6 +14,22 @@ defined('ABSPATH') || exit;
 class PackingSlipManager
 {
     /**
+     * Production warehouse PrintNode printers. Never printed to from a non-production site.
+     * These are printer ids, not credentials.
+     */
+    public const PRODUCTION_PRINTER_IDS = ['74857961', '71895499', '73994577'];
+
+    /**
+     * Order meta recording a successful auto-print (time and printer id)
+     */
+    public const PRINTED_META = '_dd_packing_slip_printed';
+
+    /**
+     * Order meta set on review checkout orders by the review sandbox mu-plugin
+     */
+    public const REVIEW_ORDER_META = '_dd_review_order';
+
+    /**
      * Initialize hooks
      */
     public static function init(): void
@@ -21,8 +37,8 @@ class PackingSlipManager
         // Add metabox to order edit page
         add_action('add_meta_boxes', [self::class, 'addMetabox']);
 
-        // Auto-print on order status change
-        add_action('woocommerce_order_status_shipped', [self::class, 'autoPrintOnShipped']);
+        // Auto-print when the order moves to the store's "Ship" status (slug: ship)
+        add_action('woocommerce_order_status_ship', [self::class, 'autoPrintOnShip']);
 
         // Stream packing slip PDF to authorised admins
         add_action('admin_post_dd_packing_slip', [self::class, 'streamPdf']);
@@ -315,28 +331,54 @@ class PackingSlipManager
     }
 
     /**
-     * Auto-print packing slip when order is shipped
+     * Auto-print packing slip when the order moves to "Ship"
+     *
+     * Idempotent: a successful print is recorded on the order and never repeated, so setting
+     * Ship twice does not print twice.
      *
      * @param int $order_id Order ID
      */
-    public static function autoPrintOnShipped($order_id): void
+    public static function autoPrintOnShip($order_id): void
     {
         // Check if auto-print is enabled
         if (get_option('packaging_labels_auto_print', '0') !== '1') {
             return;
         }
 
-        // Get API key and printer ID
-        $api_key = get_option('packaging_labels_printnode_api_key', '');
-        $printer_id = get_option('packaging_labels_printer_id', '');
-
-        if (empty($api_key) || empty($printer_id)) {
-            return;
-        }
-
         $order = wc_get_order($order_id);
 
         if (!$order) {
+            return;
+        }
+
+        $printed = $order->get_meta(self::PRINTED_META);
+
+        if (self::isPrinted($printed)) {
+            $order->add_order_note(sprintf(
+                'Packing slip not auto-printed: already printed%s.',
+                is_array($printed) && !empty($printed['time']) ? ' on ' . $printed['time'] : ''
+            ));
+            return;
+        }
+
+        // Get API key and printer ID
+        $api_key = (string) get_option('packaging_labels_printnode_api_key', '');
+        $printer_id = self::normalisePrinterId(get_option('packaging_labels_printer_id', ''));
+
+        if ($api_key === '' || $printer_id === '') {
+            $order->add_order_note('Packing slip not auto-printed: PrintNode API key or printer ID is not configured.');
+            return;
+        }
+
+        $reason = self::autoPrintBlockReason(
+            self::currentEnv(),
+            $printer_id,
+            $order->get_meta(self::REVIEW_ORDER_META),
+            defined('DD_PACKING_SLIP_PRINT_ALL_ORDERS') && DD_PACKING_SLIP_PRINT_ALL_ORDERS === true
+        );
+
+        if ($reason !== null) {
+            $order->add_order_note('Packing slip not auto-printed: ' . $reason);
             return;
         }
 
@@ -359,13 +401,128 @@ class PackingSlipManager
 
         // Log errors if any
         if (is_wp_error($response)) {
-            error_log('PrintNode API Error: ' . $response->get_error_message());
+            error_log('PrintNode API Error for order #' . $order_id . ': ' . $response->get_error_message());
+            $order->add_order_note('Packing slip auto-print failed: ' . $response->get_error_message());
             return;
         }
 
         $code = (int) wp_remote_retrieve_response_code($response);
+
         if ($code < 200 || $code >= 300) {
             error_log('PrintNode API Error: HTTP ' . $code . ' for order #' . $order_id . ' - ' . substr((string) wp_remote_retrieve_body($response), 0, 200));
+            $order->add_order_note(sprintf('Packing slip auto-print failed: PrintNode returned HTTP %d. Not marked as printed.', $code));
+            return;
         }
+
+        // Only a 2xx response marks the order printed. Saved through the order API so HPOS works.
+        $job_id = trim((string) wp_remote_retrieve_body($response));
+        $order->update_meta_data(self::PRINTED_META, [
+            'time'       => gmdate('c'),
+            'printer_id' => $printer_id,
+            'job_id'     => ctype_digit($job_id) ? $job_id : '',
+        ]);
+        $order->save_meta_data();
+
+        $order->add_order_note(sprintf(
+            'Packing slip sent to PrintNode printer %s%s.',
+            $printer_id,
+            ctype_digit($job_id) ? ' (print job ' . $job_id . ')' : ''
+        ));
+    }
+
+    /**
+     * Current WP_ENV, or null when it is not defined
+     */
+    public static function currentEnv(): ?string
+    {
+        return defined('WP_ENV') ? (string) WP_ENV : null;
+    }
+
+    /**
+     * Whether the non-production print guards apply. Anything that is not production is
+     * guarded, including an undefined WP_ENV.
+     */
+    public static function guardsApply(?string $env): bool
+    {
+        return $env !== 'production';
+    }
+
+    /**
+     * Printer id with surrounding whitespace and any "pn_" prefix removed
+     *
+     * @param mixed $printer_id
+     */
+    public static function normalisePrinterId($printer_id): string
+    {
+        $id = trim((string) $printer_id);
+
+        if (stripos($id, 'pn_') === 0) {
+            $id = substr($id, 3);
+        }
+
+        return trim($id);
+    }
+
+    /**
+     * Whether a printer id is one of the production warehouse printers
+     *
+     * @param mixed $printer_id
+     */
+    public static function isProductionPrinter($printer_id): bool
+    {
+        return in_array(self::normalisePrinterId($printer_id), self::PRODUCTION_PRINTER_IDS, true);
+    }
+
+    /**
+     * Why any print (automatic or manual) to this printer is refused, or null if allowed.
+     * Applies on non-production only; never blocks anything on production.
+     *
+     * @param mixed $printer_id
+     */
+    public static function printBlockReason(?string $env, $printer_id): ?string
+    {
+        if (!self::guardsApply($env)) {
+            return null;
+        }
+
+        if (self::isProductionPrinter($printer_id)) {
+            return 'the configured printer is a production warehouse printer and this is not the production site.';
+        }
+
+        return null;
+    }
+
+    /**
+     * Why an automatic print is refused, or null if allowed.
+     *
+     * On non-production only review checkout orders print, unless DD_PACKING_SLIP_PRINT_ALL_ORDERS
+     * is true. The production printer deny-list applies regardless of that override.
+     *
+     * @param mixed $printer_id
+     * @param mixed $review_meta Value of the _dd_review_order order meta
+     */
+    public static function autoPrintBlockReason(?string $env, $printer_id, $review_meta, bool $print_all_orders): ?string
+    {
+        $reason = self::printBlockReason($env, $printer_id);
+
+        if ($reason !== null || !self::guardsApply($env)) {
+            return $reason;
+        }
+
+        if (!$print_all_orders && $review_meta !== '1') {
+            return 'not a review order and this is not the production site.';
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether the printed meta records a successful print
+     *
+     * @param mixed $printed Value of the _dd_packing_slip_printed order meta
+     */
+    public static function isPrinted($printed): bool
+    {
+        return is_array($printed) ? !empty($printed['time']) : !empty($printed);
     }
 }

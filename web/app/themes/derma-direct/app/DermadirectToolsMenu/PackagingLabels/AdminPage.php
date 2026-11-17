@@ -76,6 +76,13 @@ class AdminPage
         $printer_id = get_option('packaging_labels_printer_id', '');
         $auto_print = get_option('packaging_labels_auto_print', '0');
 
+        // Printing to a production warehouse printer is refused on non-production sites
+        $block_reason = PackingSlipManager::printBlockReason(PackingSlipManager::currentEnv(), $printer_id);
+
+        if ($block_reason !== null) {
+            echo '<div class="notice notice-error"><p>' . esc_html__('Packing slips will not print:', 'derma-direct') . ' ' . esc_html($block_reason) . '</p></div>';
+        }
+
         ?>
         <div class="wrap">
             <h1><?php echo esc_html__('Packaging Labels Settings', 'derma-direct'); ?></h1>
@@ -142,7 +149,7 @@ class AdminPage
                                         value="1"
                                         <?php checked($auto_print, '1'); ?>
                                     />
-                                    <?php echo esc_html__('Automatically print packing slips when order status changes to "Shipped"', 'derma-direct'); ?>
+                                    <?php echo esc_html__('Automatically print packing slips when order status changes to "Ship"', 'derma-direct'); ?>
                                 </label>
                             </td>
                         </tr>

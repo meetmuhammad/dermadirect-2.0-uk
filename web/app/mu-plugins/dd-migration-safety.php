@@ -40,7 +40,8 @@ function is_active(): bool
 
 /**
  * Hosts the site may still talk to. Loopback only - everything that matters for local QA is
- * either in-process or in the Docker network.
+ * either in-process or in the Docker network. Deliberate exceptions go in DD_SAFETY_ALLOW_HOSTS
+ * (see the allow-list section below), never here.
  */
 function is_allowed_host(string $host): bool
 {
@@ -57,6 +58,122 @@ function is_allowed_host(string $host): bool
 
     // Local DevKinsta hostnames.
     return (bool) preg_match('/\.local$/', $host);
+}
+
+/* ------------------------------------------------------------------------
+ * Outbound allow-list
+ *
+ * Opt-in exceptions to the HTTP block for integrations that must be tested end to end on a
+ * non-production copy (for example a separate PrintNode account). Empty by default, so the
+ * harness blocks everything until someone deliberately lists a host.
+ *
+ * Matching is exact and case-insensitive on the host, https only. There are no wildcards and no
+ * suffix matching: listing api.printnode.com does not allow evil-api.printnode.com or
+ * api.printnode.com.evil.com. Entries that are not plain hostnames are ignored.
+ *
+ * The parse and match functions are pure so they can be tested without WordPress.
+ * ---------------------------------------------------------------------- */
+const ALLOW_HOSTS_NAME = 'DD_SAFETY_ALLOW_HOSTS';
+
+/**
+ * Whether a single allow-list entry is a plain, fully qualified hostname.
+ * Rejects wildcards, schemes, paths, ports and anything with other characters.
+ */
+function is_valid_allow_host(string $host): bool
+{
+    if ($host === '' || strlen($host) > 253) {
+        return false;
+    }
+
+    $label = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
+
+    return (bool) preg_match('/^' . $label . '(?:\.' . $label . ')+$/D', $host);
+}
+
+/**
+ * Parses a comma or whitespace separated host list into unique, lowercased, valid hostnames.
+ *
+ * @return string[]
+ */
+function parse_allow_hosts(string $raw): array
+{
+    $hosts = [];
+
+    foreach (preg_split('/[\s,]+/', strtolower($raw), -1, PREG_SPLIT_NO_EMPTY) as $entry) {
+        if (is_valid_allow_host($entry)) {
+            $hosts[$entry] = true;
+        }
+    }
+
+    return array_keys($hosts);
+}
+
+/**
+ * Whether a URL may pass the harness: https scheme, no embedded credentials, and a host that
+ * exactly matches an allow-list entry.
+ *
+ * @param string[] $allow_hosts Output of parse_allow_hosts().
+ */
+function is_allow_listed_url(string $url, array $allow_hosts): bool
+{
+    if (!$allow_hosts) {
+        return false;
+    }
+
+    $parts = parse_url($url);
+
+    if (!is_array($parts) || strtolower($parts['scheme'] ?? '') !== 'https' || isset($parts['user']) || isset($parts['pass'])) {
+        return false;
+    }
+
+    $host = strtolower($parts['host'] ?? '');
+
+    return $host !== '' && in_array($host, $allow_hosts, true);
+}
+
+/**
+ * URL reduced to scheme, host, port and path, so query strings, fragments and credentials
+ * (which may carry tokens) never reach the log.
+ */
+function url_for_log(string $url): string
+{
+    $parts = parse_url($url);
+
+    if (!is_array($parts) || !isset($parts['host'])) {
+        return '';
+    }
+
+    return strtolower($parts['scheme'] ?? '') . '://' . strtolower($parts['host'])
+        . (isset($parts['port']) ? ':' . (int) $parts['port'] : '')
+        . ($parts['path'] ?? '');
+}
+
+/**
+ * Raw allow-list: the constant if defined, otherwise the environment (getenv, then $_ENV/$_SERVER).
+ */
+function allow_hosts_raw(): string
+{
+    if (defined(ALLOW_HOSTS_NAME)) {
+        return (string) constant(ALLOW_HOSTS_NAME);
+    }
+
+    $value = getenv(ALLOW_HOSTS_NAME);
+
+    if ($value === false) {
+        $value = $_ENV[ALLOW_HOSTS_NAME] ?? $_SERVER[ALLOW_HOSTS_NAME] ?? '';
+    }
+
+    return is_string($value) ? $value : '';
+}
+
+/**
+ * Configured allow-list, parsed.
+ *
+ * @return string[]
+ */
+function allow_hosts(): array
+{
+    return parse_allow_hosts(allow_hosts_raw());
 }
 
 /**
@@ -99,6 +216,13 @@ add_filter('pre_http_request', function ($preempt, $args, $url) {
     $host = (string) parse_url($url, PHP_URL_HOST);
 
     if ($host === '' || is_allowed_host($host)) {
+        return $preempt;
+    }
+
+    // Opt-in allow-list (empty by default). Logged with the query string stripped.
+    if (is_allow_listed_url((string) $url, allow_hosts())) {
+        record('http-allowed', strtolower($host) . ' ' . url_for_log((string) $url));
+
         return $preempt;
     }
 
@@ -219,12 +343,16 @@ add_filter('pre_option_blog_public', '__return_zero');
  * 6. Make the harness impossible to miss
  * ---------------------------------------------------------------------- */
 add_action('admin_notices', function () {
+    $allow = allow_hosts();
+
     printf(
         '<div class="notice notice-warning"><p><strong>Migration safety harness active.</strong> '
         . 'Outbound HTTP, email, live payments, Action Scheduler and indexing are disabled '
-        . '(WP_ENV: <code>%s</code>). %d side effects blocked so far.</p></div>',
+        . '(WP_ENV: <code>%s</code>). %d side effects logged so far. '
+        . 'Outbound HTTPS allow-list: %s.</p></div>',
         esc_html(defined('WP_ENV') ? WP_ENV : 'undefined'),
-        count((array) get_option(LOG_OPTION, []))
+        count((array) get_option(LOG_OPTION, [])),
+        $allow ? '<code>' . esc_html(implode(' ', $allow)) . '</code>' : 'none'
     );
 });
 
@@ -242,7 +370,10 @@ if (defined('WP_CLI') && WP_CLI) {
 
         \WP_CLI::log('Harness:  ACTIVE');
         \WP_CLI::log('WP_ENV:   ' . (defined('WP_ENV') ? WP_ENV : 'undefined'));
-        \WP_CLI::log('Blocked:  ' . count($log) . ' side effects');
+        $allow = allow_hosts();
+
+        \WP_CLI::log('Allowed:  ' . ($allow ? implode(' ', $allow) . ' (https only, exact host match)' : 'none (all outbound HTTP blocked)'));
+        \WP_CLI::log('Logged:   ' . count($log) . ' side effects (kind http-allowed = let through by the allow-list)');
 
         if ($log) {
             \WP_CLI\Utils\format_items('table', array_slice($log, 0, 25), ['time', 'kind', 'detail']);
