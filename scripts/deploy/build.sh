@@ -38,7 +38,8 @@ for f in .env web/.htaccess web/app/mu-plugins/000-local-safety.php web/app/mu-p
 rm -rf "$SRC/docker" "$SRC/local" "$SRC/docs" "$SRC/scripts/migration/tests"
 printf '%s\n' "$COMMIT" > "$SRC/REVISION"
 NAME=dd-code-$(printf %.12s "$COMMIT")
-COPYFILE_DISABLE=1 tar --no-mac-metadata --no-xattrs -C "$SRC" -czf "$OUT/$NAME.tar.gz" .   # no macOS ._ metadata entries (Linux would extract them as files)
+MACMETA=; if tar --version 2>/dev/null | grep -q bsdtar; then MACMETA=--no-mac-metadata; fi   # bsdtar only; GNU tar rejects it
+COPYFILE_DISABLE=1 tar $MACMETA --no-xattrs -C "$SRC" -czf "$OUT/$NAME.tar.gz" .   # no macOS ._ metadata entries (Linux would extract them as files)
 ( cd "$OUT" && shasum -a 256 "$NAME.tar.gz" > "$NAME.tar.gz.sha256" )
 WPV=$(sed -n "s/^\$wp_version = '\(.*\)';/\1/p" "$SRC/web/wp/wp-includes/version.php")
 printf '{"commit":"%s","artifact":"%s.tar.gz","sha256":"%s","wordpress":"%s","built_at_utc":"%s","mode":"%s"}\n' \

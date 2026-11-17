@@ -264,6 +264,11 @@ The transferred source tracked files match GitHub commit `79840268b41b117df372bc
 or continuing this work, cite the specific log file(s) produced by an actual run as evidence —
 the environment has been executed and verified. Cite `VERIFICATION-REPORT.md` and the timestamped logs for current evidence.
 
+## Runbooks
+
+- [Print and pick on 2.0 staging](docs/print-pick-runbook.md): PrintNode packing slips,
+  PickingPal licence seat and the `DD_SAFETY_ALLOW_HOSTS` harness allow-list.
+
 ## Notes
 
 - The `wp-cli.yml` committed here is only a placeholder for a stock Bedrock layout
