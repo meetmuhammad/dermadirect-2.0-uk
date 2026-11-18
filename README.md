@@ -268,6 +268,9 @@ the environment has been executed and verified. Cite `VERIFICATION-REPORT.md` an
 
 - [Print and pick on 2.0 staging](docs/print-pick-runbook.md): PrintNode packing slips,
   PickingPal licence seat and the `DD_SAFETY_ALLOW_HOSTS` harness allow-list.
+- [Database indexes](docs/database-indexes.md): the `wp_postmeta` `meta_key_value` index that Woo
+  Discount Rules order lookups need; run `wp dd db-indexes ensure` once per environment after a
+  database import.
 
 ## Notes
 
