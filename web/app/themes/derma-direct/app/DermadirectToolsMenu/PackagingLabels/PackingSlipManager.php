@@ -164,7 +164,11 @@ class PackingSlipManager
         // Generate HTML
         ob_start();
         self::renderPdfHtml($order);
-        $html = ob_get_clean();
+        $html = (string) ob_get_clean();
+
+        if (self::testMarkingEnabled()) {
+            $html = self::markTestHtml($html);
+        }
 
         // Create PDF
         $pdf->loadHtml($html);
@@ -396,7 +400,7 @@ class PackingSlipManager
                 'printerId'   => (int) $printer_id,
                 'contentType' => 'pdf_base64',
                 'content'     => base64_encode($bytes),
-                'title'       => 'Packing Slip - Order #' . $order_id,
+                'title'       => self::printJobTitle($order_id, self::testMarkingEnabled()),
             ]),
         ]);
 
@@ -429,6 +433,76 @@ class PackingSlipManager
             $printer_id,
             ctype_digit($job_id) ? ' (print job ' . $job_id . ')' : ''
         ));
+    }
+
+    /**
+     * Fallback TEST banner text, used only when the test print marker mu-plugin is missing
+     */
+    public const TEST_BANNER_TEXT = 'TEST ORDER - DERMADIRECT 2.0 - DO NOT PICK OR SHIP';
+
+    /**
+     * PrintNode job title prefix required while TEST marking is on
+     */
+    public const TEST_PRINTJOB_TITLE_PREFIX = 'TEST DD2.0 - ';
+
+    /**
+     * Whether printed packing slips carry the TEST marking. Decided by the test print marker
+     * mu-plugin; if that is missing, every non-production site is marked (fail closed).
+     */
+    public static function testMarkingEnabled(): bool
+    {
+        if (function_exists('DermaDirect\\TestPrintMarker\\enabled')) {
+            return \DermaDirect\TestPrintMarker\enabled();
+        }
+
+        return self::guardsApply(self::currentEnv());
+    }
+
+    /**
+     * Packing slip HTML with the TEST banner and watermark from the mu-plugin, or a plain banner
+     * when the mu-plugin is missing
+     */
+    public static function markTestHtml(string $html): string
+    {
+        if (function_exists('DermaDirect\\TestPrintMarker\\mark_html')) {
+            return \DermaDirect\TestPrintMarker\mark_html($html);
+        }
+
+        return self::fallbackMarkHtml($html);
+    }
+
+    /**
+     * Plain TEST banner inserted after the opening body tag (or prepended), once
+     */
+    public static function fallbackMarkHtml(string $html): string
+    {
+        if (strpos($html, 'dd-test-print-fallback') !== false) {
+            return $html;
+        }
+
+        $banner = '<div id="dd-test-print-fallback" style="background:#000000;color:#ffffff;border:4px solid #d00000;'
+            . 'padding:8px;margin:0 0 8px 0;text-align:center;font-size:20px;font-weight:bold;">'
+            . self::TEST_BANNER_TEXT . '<br>' . self::TEST_BANNER_TEXT . '</div>';
+
+        if (preg_match('/<body\b[^>]*>/i', $html, $match, PREG_OFFSET_CAPTURE)) {
+            $at = $match[0][1] + strlen($match[0][0]);
+
+            return substr($html, 0, $at) . $banner . substr($html, $at);
+        }
+
+        return $banner . $html;
+    }
+
+    /**
+     * PrintNode job title for an order's packing slip. Carries the TEST prefix when marked.
+     *
+     * @param int|string $order_id
+     */
+    public static function printJobTitle($order_id, bool $marked): string
+    {
+        $title = 'Packing Slip - Order #' . $order_id;
+
+        return $marked ? self::TEST_PRINTJOB_TITLE_PREFIX . $title : $title;
     }
 
     /**

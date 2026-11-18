@@ -367,6 +367,36 @@ DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS=true
 Then put `packaging_labels_printer_id` and `packaging_labels_printnode_api_key` back to the 2.0
 test account values from step 4, and tell the warehouse team testing is over.
 
+## TEST marking on printed documents
+
+`web/app/mu-plugins/dd-test-print-marker.php` marks every document 2.0 prints for the warehouse
+with `TEST ORDER - DERMADIRECT 2.0 - DO NOT PICK OR SHIP`: a bold black banner at the top and a
+large diagonal red watermark on every page.
+
+- **What is marked:** the theme packing slip (PDF and auto-print), WebToffee invoices, packing
+  slips, delivery notes, dispatch and shipping labels and credit notes (browser print view and
+  PDF), and PickingPal packing slips, pick lists, pick tickets, unpicked slips and barcodes.
+- **PrintNode jobs:** every job title must start with `TEST DD2.0 - `. The theme packing slip and
+  WebToffee's PrintNode add-on add it. Any other job to `api.printnode.com/printjobs` (including
+  the WebToffee "Printer test" button) is refused before it is sent and a one-line reason goes to
+  the PHP error log.
+- **Flexible Printing is blocked:** it prints carrier label PDFs that cannot be marked, so its
+  PrintNode API key is blanked in memory while marking is on. Nothing is written to the database.
+- **Production is never marked**, whatever the flag says.
+- **The flag:** `DD_PRINT_TEST_BANNER` in `.env` (commented out in `.env.example`). Unset means
+  marked. Only `false`, `0`, `off` or `no` turn marking off, which also lifts the PrintNode title
+  guard and the Flexible Printing block. **Keep it unset on 2.0.**
+
+Check before any warehouse print:
+
+```sh
+cd ~/public
+wp dd print-marker
+```
+
+It must show `Enabled:  yes` on 2.0. It prints only the environment, whether the flag is set and
+whether marking is on, never any keys.
+
 ## Clean up the backup
 
 Once everything is confirmed, delete the backup, which contains production credentials:
@@ -411,27 +441,56 @@ warehouse)
 5. Test with one order: move a paid test order to **Ship**, confirm exactly one slip printed and
    the order has `_dd_packing_slip_printed`.
 
-**B. Shiptheory test account** (needs: the test account login; the warehouse lead owns that
-account)
+**B. Shiptheory test account** (a SEPARATE Shiptheory account connected to 2.0 for the test only,
+so no 2.0 order ever reaches the live Shiptheory account)
 
-1. In the Shiptheory TEST account, add a WooCommerce channel for
-   https://dermadirect20uk.kinsta.cloud. If it asks for WooCommerce REST API keys, create them on
-   2.0 under WooCommerce > Settings > Advanced > REST API for an admin user, Read/Write,
-   description "Shiptheory TEST". Paste them only into Shiptheory, never into chat, tickets or
-   files.
-2. Shiptheory then creates its own webhook on 2.0. List webhooks without printing URLs, then
-   compare a short hash of each delivery URL (it can contain account identifiers):
+1. From the warehouse lead: the test account login, written confirmation that it is a separate
+   account from live (not a second channel on the live account), and the receiving status to use
+   (live uses Ship). Without all three, stop.
+2. Pre-checks. Webhook 19 ("Shiptheory", topic `action.woocommerce_order_status_ship`) is the LIVE
+   account's webhook. Because `quark.madcapsule.com` is allow-listed, it must never be re-activated
+   and never deleted without approval. Nothing must be waiting to be delivered (copied jobs would
+   go to live):
    ```sh
    wp wc webhook list --user=<admin id> --fields=id,name,status
-   wp wc webhook get <id> --user=<admin id> --field=delivery_url | sha256sum | cut -c1-12
-   wp wc webhook get <id> --user=<admin id> --field=delivery_url | awk -F/ '{print $3}'
+   wp wc webhook get 19 --user=<admin id> --field=delivery_url | sha256sum | cut -c1-12
+   wp action-scheduler action list --hook=woocommerce_deliver_webhook_async --status=pending --format=count
    ```
-   The new webhook must be active and its hash must differ from webhook 19's. The last command
-   prints only the host. If it is not `quark.madcapsule.com`, add that exact host to
-   `DD_SAFETY_ALLOW_HOSTS` only with approval.
-3. Leave webhook 19 paused. Do not delete it without approval.
-4. Test with one order moved to **Ship**: it appears in the Shiptheory TEST account, not the live
-   one.
+   Webhook 19 must be paused, its hash `486f99d79092` and the pending count 0. Otherwise stop.
+3. Do not reuse the copied live key "Shiptheory - API (2025-12-12 ...)" (key_id 16) and do not
+   revoke it without approval.
+4. Connect. In the TEST account go to Channels, enable WooCommerce, enter
+   `https://dermadirect20uk.kinsta.cloud`, press Connect, log in to 2.0 as an administrator and
+   press Approve. Set the TEST account's receiving order status to the one agreed in step 1.
+5. If the approval fails, the safety harness may have blocked the key callback. Print only the
+   status lines and the newest blocked host, never the full table (it contains tokens):
+   ```sh
+   wp dd safety | grep -E '^(Harness|WP_ENV|Allowed)'
+   wp eval 'foreach ((array) get_option("dd_safety_blocked_log", []) as $e) { if ($e["kind"] === "http") { echo $e["time"], " ", strtok($e["detail"], " "), PHP_EOL; break; } }'
+   ```
+   Adding that host to `DD_SAFETY_ALLOW_HOSTS` needs approval. Fallback: create the key under
+   WooCommerce > Settings > Advanced > REST API, description "Shiptheory TEST", Read/Write, and
+   enter it in Shiptheory if it offers manual keys. Paste keys only into Shiptheory.
+6. Verify the new webhook with the commands from step 2 plus these (no URL is printed):
+   ```sh
+   wp wc webhook get <new id> --user=<admin id> --fields=id,name,status,topic
+   wp wc webhook get <new id> --user=<admin id> --field=delivery_url | awk -F/ '{print $3}'
+   ```
+   It must be active, its topic must match the receiving status (`action.woocommerce_order_status_ship`
+   for Ship), the host must be allow-listed and its hash must differ from `486f99d79092`. Webhook
+   19 must still be paused with the same hash. If anything differs, pause the new webhook and stop.
+7. Test with one order. WP-Cron is off and there is no server cron, so deliveries never go out on
+   their own (do not enable WP-Cron without approval). Move the order to **Ship**, check every
+   pending job is for the new webhook id, then send them:
+   ```sh
+   wp action-scheduler action list --hook=woocommerce_deliver_webhook_async --status=pending --fields=id,args
+   wp action-scheduler run --hooks=woocommerce_deliver_webhook_async --batch-size=20
+   ```
+   If any pending job names webhook 19, stop and do not run.
+8. Prove nothing reached live: the new webhook's hash differs from `486f99d79092`; webhook 19 is
+   still paused and has no delivery job (no `"webhook_id":19` in the list above) and no entry under
+   WooCommerce > Status > Logs, source webhooks-delivery; the order appears in the TEST account;
+   the warehouse lead confirms the live account shows no order with a 2.0 number such as 1000007.
 
 **C. PickingPal**
 
@@ -441,9 +500,12 @@ account)
 **Rollback (end of test)**
 
 1. Auto-print off and both flags removed (see that section's [Rollback](#rollback-1)).
-2. Pause the Shiptheory TEST webhook.
-3. Revoke the "Shiptheory TEST" REST API key.
-4. Tell the warehouse team testing is over.
+2. Pause the Shiptheory TEST webhook (`wp wc webhook update <new id> --user=<admin id>
+   --status=paused`). Leave webhook 19 paused.
+3. Revoke the test key under WooCommerce > Settings > Advanced > REST API: the "Shiptheory - API"
+   key created by the test connection (newer than key_id 16) or "Shiptheory TEST". Not key_id 16.
+4. Remove any host added to `DD_SAFETY_ALLOW_HOSTS` for the test, then check `wp dd safety`.
+5. Tell the warehouse team testing is over.
 
 ## Out of scope
 
