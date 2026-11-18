@@ -43,7 +43,8 @@ add_filter('wc_stripe_payment_intent_args',function($args,$order){
  unset($args['receipt_email'],$args['setup_future_usage']);$args['metadata']['dd_review']='1';return $args;
 },PHP_INT_MAX,2);
 // Reject provider callbacks during this bounded test; no migrated order may be updated by them.
-// Only exception: GET/POST to the WC REST webhooks collection (see dd-review-sandbox/callback-guard.php).
+// Only exceptions: GET/POST to the WC REST webhooks collection and GET/PUT/PATCH to webhooks with
+// id >= DD_WEBHOOK_MIN_EDITABLE_ID (default 27) (see dd-review-sandbox/callback-guard.php).
 require_once __DIR__.'/dd-review-sandbox/callback-guard.php';
 add_action('init',function(){
  if(is_blocked_callback((string)($_SERVER['REQUEST_URI']??''),(string)($_SERVER['REQUEST_METHOD']??''),is_array($_POST)?$_POST:[],(string)($_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE']??''))){status_header(403);exit('Review-site integration callbacks disabled');}
