@@ -191,6 +191,15 @@ foreach (['DD_PACKING_SLIP_PRINT_ALL_ORDERS', 'DD_PACKING_SLIP_ALLOW_PRODUCTION_
 unset($dd_print_flag);
 
 /**
+ * TEST marking on printed documents (non-production only, see docs/print-pick-runbook.md).
+ * Defined only when the variable is set, with the raw value kept: env() turns "false" into
+ * boolean false, and the marker also treats '0', 'off' and 'no' as off. Anything else is on.
+ */
+if (env('DD_PRINT_TEST_BANNER') !== null) {
+    Config::define('DD_PRINT_TEST_BANNER', env('DD_PRINT_TEST_BANNER'));
+}
+
+/**
  * Debugging Settings
  */
 Config::define('WP_DEBUG_DISPLAY', false);

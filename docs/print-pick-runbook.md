@@ -367,6 +367,36 @@ DD_PACKING_SLIP_ALLOW_PRODUCTION_PRINTERS=true
 Then put `packaging_labels_printer_id` and `packaging_labels_printnode_api_key` back to the 2.0
 test account values from step 4, and tell the warehouse team testing is over.
 
+## TEST marking on printed documents
+
+`web/app/mu-plugins/dd-test-print-marker.php` marks every document 2.0 prints for the warehouse
+with `TEST ORDER - DERMADIRECT 2.0 - DO NOT PICK OR SHIP`: a bold black banner at the top and a
+large diagonal red watermark on every page.
+
+- **What is marked:** the theme packing slip (PDF and auto-print), WebToffee invoices, packing
+  slips, delivery notes, dispatch and shipping labels and credit notes (browser print view and
+  PDF), and PickingPal packing slips, pick lists, pick tickets, unpicked slips and barcodes.
+- **PrintNode jobs:** every job title must start with `TEST DD2.0 - `. The theme packing slip and
+  WebToffee's PrintNode add-on add it. Any other job to `api.printnode.com/printjobs` (including
+  the WebToffee "Printer test" button) is refused before it is sent and a one-line reason goes to
+  the PHP error log.
+- **Flexible Printing is blocked:** it prints carrier label PDFs that cannot be marked, so its
+  PrintNode API key is blanked in memory while marking is on. Nothing is written to the database.
+- **Production is never marked**, whatever the flag says.
+- **The flag:** `DD_PRINT_TEST_BANNER` in `.env` (commented out in `.env.example`). Unset means
+  marked. Only `false`, `0`, `off` or `no` turn marking off, which also lifts the PrintNode title
+  guard and the Flexible Printing block. **Keep it unset on 2.0.**
+
+Check before any warehouse print:
+
+```sh
+cd ~/public
+wp dd print-marker
+```
+
+It must show `Enabled:  yes` on 2.0. It prints only the environment, whether the flag is set and
+whether marking is on, never any keys.
+
 ## Clean up the backup
 
 Once everything is confirmed, delete the backup, which contains production credentials:
