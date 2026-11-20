@@ -40,6 +40,7 @@ class OrderFiltersManager
 
         // Add hooks for HPOS orders page
         add_action('woocommerce_order_list_table_restrict_manage_orders', [self::class, 'showFiltersHPOS']);
+        add_action('admin_footer', [self::class, 'showFiltersModal']);
 
         // Hook into WooCommerce HPOS (High-Performance Order Storage) if available
         if (self::isHPOSEnabled()) {
@@ -142,8 +143,7 @@ class OrderFiltersManager
             return;
         }
 
-        $output = self::buildFiltersHTML();
-        echo $output;
+        echo self::buildAppliedFiltersContainerHTML();
     }
 
     /**
@@ -156,23 +156,56 @@ class OrderFiltersManager
             return;
         }
 
-        $output = self::buildFiltersHTML();
-        echo $output;
+        echo self::buildAppliedFiltersContainerHTML();
     }
 
     /**
-     * Build the complete filters HTML
+     * Output the filters modal in the admin footer.
+     *
+     * The modal contains its own <form>, so it must be rendered outside the
+     * orders list table form (#posts-filter / #wc-orders-filter). Nesting it
+     * there closes the list form early and breaks bulk actions.
+     */
+    public static function showFiltersModal(): void
+    {
+        $screen = function_exists('get_current_screen') ? get_current_screen() : null;
+        if (!$screen) {
+            return;
+        }
+
+        if ($screen->id === 'edit-shop_order') {
+            if (sanitize_text_field($_GET['post_type'] ?? '') !== 'shop_order') {
+                return;
+            }
+        } elseif ($screen->id !== 'woocommerce_page_wc-orders') {
+            return;
+        }
+
+        echo self::buildFiltersModalHTML();
+    }
+
+    /**
+     * Build the applied filters pills container HTML
      *
      * @return string
      */
-    private static function buildFiltersHTML(): string
+    private static function buildAppliedFiltersContainerHTML(): string
     {
-        $output = '';
-
-        // Applied filters pills container
-        $output .= '<div class="applied-filters-container">';
+        $output = '<div class="applied-filters-container">';
         $output .= self::buildAppliedFiltersPills();
         $output .= '</div>';
+
+        return $output;
+    }
+
+    /**
+     * Build the filters modal HTML
+     *
+     * @return string
+     */
+    private static function buildFiltersModalHTML(): string
+    {
+        $output = '';
 
         // Modal overlay and popup
         $output .= '<div class="order-filters-modal-overlay" id="order-filters-modal">';
