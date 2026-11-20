@@ -6,8 +6,10 @@
  * Fail-closed: no gateway for anyone except logged-in users flagged usermeta dd_review_tester=1 while the
  * window option dd_review_sandbox is active and unexpired; only stripe_cc; only sk_test_/pk_test_ keys; live keys
  * stripped from the option; HTTP only to api.stripe.com v1 (allow-listed endpoints); saved cards hidden; no Stripe
- * receipt emails; every checkout order is labelled _dd_review_order; ALL provider callbacks stay blocked until a
- * reviewed webhook rule is added.
+ * receipt emails; every checkout order is labelled _dd_review_order; legacy wc-api and other provider callbacks stay
+ * blocked. The WooCommerce REST webhooks API is allowed for the test channel, but the live webhooks copied from
+ * production (ids 19-26) stay disabled: REST calls and batch requests targeting them are rejected, they never
+ * deliver, and they cannot be saved from the webhook settings screen. Webhook records are never modified here.
  */
 namespace DermaDirect\ReviewSandbox;
 defined('ABSPATH') || exit;
@@ -42,13 +44,25 @@ add_filter('wc_stripe_payment_intent_args',function($args,$order){
  if(strtolower($args['currency']??'')!=='gbp')throw new \RuntimeException('Review currency limit');
  unset($args['receipt_email'],$args['setup_future_usage']);$args['metadata']['dd_review']='1';return $args;
 },PHP_INT_MAX,2);
-// Reject provider callbacks during this bounded test; no migrated order may be updated by them.
-// Only exceptions: GET/POST to the WC REST webhooks collection and GET/PUT/PATCH to webhooks with
-// id >= DD_WEBHOOK_MIN_EDITABLE_ID (default 27) (see dd-review-sandbox/callback-guard.php).
+// Reject legacy wc-api and other provider callbacks during this bounded test; no migrated order may be updated by them.
+// The WooCommerce REST webhooks API is open to the test channel, except for the webhooks copied from production
+// (ids PROTECTED_WEBHOOK_ID_MIN..MAX, 19-26), which stay disabled (see dd-review-sandbox/callback-guard.php).
 require_once __DIR__.'/dd-review-sandbox/callback-guard.php';
 add_action('init',function(){
- if(is_blocked_callback((string)($_SERVER['REQUEST_URI']??''),(string)($_SERVER['REQUEST_METHOD']??''),is_array($_POST)?$_POST:[],(string)($_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE']??''))){status_header(403);exit('Review-site integration callbacks disabled');}
+ $json=[];
+ $type=strtolower((string)($_SERVER['CONTENT_TYPE']??$_SERVER['HTTP_CONTENT_TYPE']??''));
+ if(str_contains($type,'json')){
+  $raw=(string)file_get_contents('php://input');
+  if(trim($raw)!==''){$decoded=json_decode($raw,true);$json=is_array($decoded)?$decoded:null;}
+ }
+ if(is_blocked_callback((string)($_SERVER['REQUEST_URI']??''),(string)($_SERVER['REQUEST_METHOD']??''),is_array($_POST)?$_POST:[],(string)($_SERVER['HTTP_X_HTTP_METHOD_OVERRIDE']??''),$json)){status_header(403);exit('Review-site integration callbacks disabled');}
 },-9999);
+// Safety net: the protected webhooks never deliver, even if re-activated.
+add_filter('woocommerce_webhook_should_deliver',static fn($should_deliver,$webhook,$arg)=>is_object($webhook) && method_exists($webhook,'get_id') && is_protected_webhook_id($webhook->get_id())?false:$should_deliver,PHP_INT_MAX,3);
+// The protected webhooks cannot be saved (and so re-activated) from the WooCommerce webhook settings screen.
+add_action('admin_init',function(){
+ if(isset($_POST['save_webhook']) && is_protected_webhook_id(absint($_POST['webhook_id']??0))){wp_die('Review site: this webhook is disabled and cannot be edited.','',['response'=>403]);}
+},0);
 // Load the existing installed SDK early so no plugin boot can use its unguarded default transport.
 $autoload=WP_CONTENT_DIR.'/plugins/woo-stripe-payment/vendor/autoload.php';
 if(!is_file($autoload)){throw new \RuntimeException('Review QA: required installed SDK missing');}
