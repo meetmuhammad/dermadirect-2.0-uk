@@ -449,9 +449,11 @@ Two code fixes make Shiptheory work against 2.0:
 - Product lookups (`/wc/v3/products`) with REST API keys took 30-32 s and Shiptheory gave up, because
   Woo Discount Rules built discounted price HTML with a slow first-order query. The mu-plugin
   `dd-rest-integration-perf.php` skips that price HTML only for API-key requests to the products routes.
-- The review sandbox now also allows GET, PUT and PATCH to `/wc/v1|v2|v3/webhooks/<id>` when the id is
-  27 or higher (`DD_WEBHOOK_MIN_EDITABLE_ID`), so Shiptheory can update its own webhook. Webhooks 26 and
-  lower (19 live Shiptheory, 20-26 Omnisend) stay blocked, and DELETE stays blocked for every id.
+- The review sandbox allows the WooCommerce REST webhooks API (`/wc/v1|v2|v3/webhooks`, any method,
+  including `//wp-json/...` and `?rest_route=`), so Shiptheory can list, create, update and delete its own
+  webhook. Webhooks 19-26 (19 live Shiptheory, 20-26 Omnisend) stay blocked for every method, including
+  `/deliveries` and batch requests that reference them; they also never deliver and cannot be saved from
+  the webhook settings screen.
 
 1. From the warehouse lead: the test account login, written confirmation that it is a separate
    account from live (not a second channel on the live account), and the receiving status to use

@@ -3,44 +3,83 @@
  * Pure callback guard for 000-dd-review-sandbox.php. No plugin header on purpose: the Bedrock autoloader only loads
  * files with a Plugin Name header, so this file is loaded once, by require_once from the review sandbox mu-plugin.
  *
- * Blocks provider callbacks: any 'wc-api' URI, any /wp-json/ URI containing 'webhook', and any rest_route query
- * containing 'webhook'. Exceptions, on the WooCommerce REST webhooks routes (/wc/v1|v2|v3, optional trailing slash),
- * same rules for /wp-json/ and ?rest_route=:
- *  - GET or POST to the collection (/webhooks) so an approved test channel can list and create its own webhook;
- *  - GET, PUT or PATCH to an item (/webhooks/<id>) only when <id> >= the minimum editable id, so the test channel can
- *    update its own webhook. Webhooks below that id existed before the test and stay protected (19 is the live
- *    Shiptheory webhook, 20-26 are Omnisend). Minimum: DD_WEBHOOK_MIN_EDITABLE_ID if a positive integer, else 27.
- * DELETE, POST to an item, batch and deliveries routes and method overrides stay blocked.
+ * Blocks:
+ *  - any 'wc-api' URI (legacy provider callbacks);
+ *  - any request, whatever the method or method override, whose WooCommerce REST webhooks route (/wc/vN/webhooks)
+ *    targets a protected webhook id (PROTECTED_WEBHOOK_ID_MIN..PROTECTED_WEBHOOK_ID_MAX), including sub-routes such
+ *    as /deliveries;
+ *  - webhooks batch requests (/webhooks/batch) whose update or delete lists reference a protected id, or whose body
+ *    could not be parsed;
+ *  - other webhook callbacks, as before: a /wp-json/ URI or a rest_route containing 'webhook' that is not a
+ *    WooCommerce REST webhooks route (e.g. payment provider webhooks), and any non-string rest_route.
+ * All other WooCommerce REST webhook calls (list, create, read, update, delete) are allowed for any method, through
+ * /wp-json/ (repeated slashes collapsed, trailing slash, percent-encoding and case ignored) or ?rest_route= on any path.
  */
 namespace DermaDirect\ReviewSandbox;
 defined('ABSPATH') || exit;
-const DEFAULT_MIN_EDITABLE_WEBHOOK_ID=27;
-/** Minimum editable webhook id from a configured value (the constant), falling back to 27 unless a positive integer. */
-function resolve_min_editable_webhook_id($configured): int {
- if(is_int($configured))return $configured>0?$configured:DEFAULT_MIN_EDITABLE_WEBHOOK_ID;
- if(is_string($configured) && preg_match('~^[1-9]\d{0,9}$~D',$configured))return (int)$configured;
- return DEFAULT_MIN_EDITABLE_WEBHOOK_ID;
+// Protected webhook ids, copied from production: 19 is the live Shiptheory webhook, 20-26 are Omnisend.
+const PROTECTED_WEBHOOK_ID_MIN=19;
+const PROTECTED_WEBHOOK_ID_MAX=26;
+/** Whether a webhook id value (as WooCommerce would cast it with (int)) is protected. Non-scalars count as protected. */
+function is_protected_webhook_id($id): bool {
+ if(!is_scalar($id))return true;
+ $id=(int)$id;
+ return $id>=PROTECTED_WEBHOOK_ID_MIN && $id<=PROTECTED_WEBHOOK_ID_MAX;
 }
-function min_editable_webhook_id(): int {
- return resolve_min_editable_webhook_id(defined('DD_WEBHOOK_MIN_EDITABLE_ID')?constant('DD_WEBHOOK_MIN_EDITABLE_ID'):null);
+/** Route in canonical form for matching: percent-decoded, lower case, repeated slashes collapsed. */
+function normalize_route(string $route): string {
+ for($i=0;$i<3 && str_contains($route,'%');$i++)$route=rawurldecode($route);
+ return (string)preg_replace('~/{2,}~','/',strtolower($route));
 }
-/** Whether $method on WC REST route $route (no /wp-json prefix) is one of the allowed webhook exceptions. */
-function is_allowed_webhook_route(string $route,string $method,int $minId): bool {
- if(preg_match('~^/wc/v[123]/webhooks/?$~D',$route))return in_array($method,['GET','POST'],true);
- if(!preg_match('~^/wc/v[123]/webhooks/([1-9]\d{0,9})/?$~D',$route,$m))return false;
- return in_array($method,['GET','PUT','PATCH'],true) && (int)$m[1]>=$minId;
+/** Whether a batch body (update and delete lists) references a protected webhook id. Unparseable lists count as yes. */
+function batch_references_protected_id(array $params): bool {
+ foreach(['update','delete'] as $key){
+  if(!array_key_exists($key,$params))continue;
+  if(!is_array($params[$key]))return true;
+  foreach($params[$key] as $item){
+   if($key==='update')$item=is_array($item)?($item['id']??null):$item;
+   elseif(is_array($item))$item=$item['id']??null;
+   if(is_protected_webhook_id($item))return true;
+  }
+ }
+ return false;
 }
-function is_blocked_callback(string $uri,string $method,array $body=[],string $override='',?int $minEditableId=null): bool {
+/**
+ * Whether a normalized route is a WooCommerce REST webhooks route: null if not, else whether it must be blocked.
+ * $paramSets: request parameter arrays to check for batch ids; null among them means a body that could not be parsed.
+ */
+function webhook_route_blocked(string $route,array $paramSets): ?bool {
+ if(!preg_match('~(?:^|/)wc/v\d+/webhooks(?:/(.*))?$~',$route,$m))return null;
+ $rest=$m[1]??'';
+ if(preg_match('~^(\d+)(?:/|$)~',$rest,$id))return is_protected_webhook_id($id[1]);
+ if(!preg_match('~^batch(?:/|$)~',$rest))return false;
+ foreach($paramSets as $params)if($params===null || batch_references_protected_id($params))return true;
+ return false;
+}
+/**
+ * $body: form body ($_POST). $override: X-HTTP-Method-Override header; blocks do not depend on the method, so it only
+ * matters in that it never unblocks anything. $json: decoded JSON body ([] if none, null if sent but not parseable).
+ */
+function is_blocked_callback(string $uri,string $method,array $body=[],string $override='',?array $json=[]): bool {
  $u=strtolower($uri);
+ if(str_contains($u,'wc-api'))return true;
  [$path,$query]=array_pad(explode('?',$uri,2),2,'');
  parse_str($query,$q);
- $rr=$q['rest_route']??null;
- if(str_contains($u,'wc-api'))return true;
- $rrHook=$rr!==null && (!is_string($rr) || str_contains(strtolower($rr),'webhook'));
- if(!$rrHook && !(str_contains($u,'/wp-json/') && str_contains($u,'webhook')))return false;
- // Exceptions only without a method override and without rest_route supplied via the body.
- if($override!=='' || isset($q['_method']) || isset($body['_method']) || isset($body['rest_route']))return true;
- $minId=$minEditableId ?? min_editable_webhook_id();
- if($rr===null)return !(str_starts_with($path,'/wp-json/') && is_allowed_webhook_route(substr($path,8),$method,$minId));
- return !(in_array($path,['/','/index.php'],true) && is_string($rr) && is_allowed_webhook_route($rr,$method,$minId));
+ $paramSets=[$q,$body,$json];
+ $routes=[];
+ if(preg_match('~/wp-json(/.*)?$~s',normalize_route($path),$m))$routes[]=$m[1]??'/';
+ foreach([$q,$body] as $src){
+  if(!array_key_exists('rest_route',$src))continue;
+  if(!is_string($src['rest_route']))return true;
+  $routes[]=normalize_route($src['rest_route']);
+ }
+ $isWebhookApi=false;
+ foreach($routes as $r){
+  $blocked=webhook_route_blocked($r,$paramSets);
+  if($blocked===true)return true;
+  if($blocked===false)$isWebhookApi=true;
+  elseif(str_contains($r,'webhook'))return true;
+ }
+ // Other /wp-json/ URIs mentioning 'webhook' (e.g. in the query) stay blocked as before.
+ return !$isWebhookApi && str_contains($u,'/wp-json/') && str_contains($u,'webhook');
 }
