@@ -490,9 +490,10 @@ Two code fixes make Shiptheory work against 2.0:
    It must be active, its topic must match the receiving status (`action.woocommerce_order_status_ship`
    for Ship), the host must be allow-listed and its hash must differ from `486f99d79092`. Webhook
    19 must still be paused with the same hash. If anything differs, pause the new webhook and stop.
-7. Test with one order. WP-Cron is off and there is no server cron, so deliveries never go out on
-   their own (do not enable WP-Cron without approval). Move the order to **Ship**, check every
-   pending job is for the new webhook id, then send them:
+7. Test with one order. WP-Cron is off and there is no server cron (do not enable WP-Cron without
+   approval). Webhook deliveries are the exception: they send immediately when the order changes
+   status, without the queue. Move the order to **Ship**. If any older job is still pending, check
+   every one is for the new webhook id, then send them:
    ```sh
    wp action-scheduler action list --hook=woocommerce_deliver_webhook_async --status=pending --fields=id,args
    wp action-scheduler run --hooks=woocommerce_deliver_webhook_async --batch-size=20
