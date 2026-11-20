@@ -1,14 +1,16 @@
 <?php
 /**
  * Plugin Name:  DermaDirect Test Print Marker
- * Description:  Marks every warehouse document printed from a non-production site as a TEST, and
- *               blocks print paths that cannot be marked. See docs/print-pick-runbook.md.
+ * Description:  Marks every warehouse document printed from a non-production site as a TEST.
+ *               Flexible Printing carrier labels cannot be marked and print unmarked.
+ *               See docs/print-pick-runbook.md.
  * Version:      1.0.0
  *
  * During the warehouse test, real staff receive real printouts from this non-production copy.
  * Nothing it prints may be mistaken for a live order, so every document carries a bold banner
- * and a diagonal watermark, PrintNode jobs without the TEST title prefix are refused, and
- * Flexible Printing (carrier label PDFs we cannot mark) is cut off.
+ * and a diagonal watermark, and PrintNode jobs without the TEST title prefix are refused.
+ * Flexible Printing is no longer cut off: its carrier label PDFs cannot be marked, so they print
+ * unmarked.
  *
  * Environment-gated and fails CLOSED: never active on production, and on by default everywhere
  * else unless DD_PRINT_TEST_BANNER is explicitly off.
@@ -263,8 +265,8 @@ function prefix_remote_print_titles($docs, $order_id)
  * ---------------------------------------------------------------------- */
 
 /**
- * Flexible Printing settings with the PrintNode API key blanked, so it cannot send anything.
- * Every other setting is returned unchanged.
+ * Flexible Printing settings with the PrintNode API key blanked. Every other setting is returned
+ * unchanged. Not hooked; kept because scripts/tests/test_print_marker_test.php uses it.
  *
  * @param mixed $settings
  * @return mixed
@@ -276,36 +278,6 @@ function blank_flexible_printing_key($settings)
     }
 
     return $settings;
-}
-
-/**
- * Whether this request renders the Flexible Printing settings screen or saves its settings
- * through options.php. Only there is the stored key left visible, so the field shows it and the
- * plugin's sanitize merge keeps it.
- */
-function is_flexible_printing_settings_request(): bool
-{
-    if (!is_admin()) {
-        return false;
-    }
-
-    if (($_GET['page'] ?? null) === 'flexible-printing-settings') {
-        return true;
-    }
-
-    return ($GLOBALS['pagenow'] ?? '') === 'options.php'
-        && ($_POST['option_page'] ?? null) === 'flexible_printing_settings';
-}
-
-/**
- * Blanks the key everywhere except the settings screen and its save.
- *
- * @param mixed $settings
- * @return mixed
- */
-function filter_flexible_printing_settings($settings)
-{
-    return is_flexible_printing_settings_request() ? $settings : blank_flexible_printing_key($settings);
 }
 
 /**
@@ -330,8 +302,7 @@ function mask_flexible_printing_key_field($registered)
 }
 
 /**
- * The stored Flexible Printing settings straight from the database, bypassing the option filters
- * (and so the key blanking).
+ * The stored Flexible Printing settings straight from the database, bypassing the option filters.
  *
  * @return mixed
  */
@@ -449,13 +420,9 @@ add_filter('pre_http_request', function ($preempt, $args, $url) {
     return new \WP_Error('dd_test_print_unmarked', 'Print job blocked: ' . $reason . ' (TEST print marking is on).');
 }, 1, 3);
 
-// d. Flexible Printing talks to PrintNode through its own client, bypassing pre_http_request,
-// and prints carrier PDFs that cannot be marked. Its print path reads the key only through the
-// get_option filter below, which always returns '' here. The settings array is blanked in memory
-// too, except on the settings screen and its options.php save, so the (password) field shows the
-// stored key and re-saving keeps it. A save never replaces a stored key with an empty one.
-add_filter('option_flexible_printing_settings', __NAMESPACE__ . '\filter_flexible_printing_settings', PHP_INT_MAX);
-add_filter('flexible_printing_get_option_print_node_api_key', '__return_empty_string', PHP_INT_MAX);
+// d. Flexible Printing is not cut off: it talks to PrintNode through its own client, bypassing
+// pre_http_request, and its carrier label PDFs cannot be marked, so they print unmarked. The API
+// key field renders as a password input, and a save never replaces a stored key with an empty one.
 add_filter('flexible_printing_registered_settings', __NAMESPACE__ . '\mask_flexible_printing_key_field', PHP_INT_MAX);
 add_filter('pre_update_option_flexible_printing_settings', __NAMESPACE__ . '\keep_flexible_printing_key', PHP_INT_MAX);
 
@@ -465,6 +432,6 @@ add_action('admin_notices', function () {
     }
 
     echo '<div class="notice notice-info"><p>'
-        . esc_html('Saved. Printing from this plugin is disabled on the 2.0 test site.')
+        . esc_html('Flexible Printing can print from this 2.0 test site. Carrier labels it prints are not marked as TEST.')
         . '</p></div>';
 });
