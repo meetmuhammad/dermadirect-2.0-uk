@@ -287,8 +287,16 @@ foreach (['woocommerce_stripe_settings', 'woocommerce_stripe_cc_settings', 'wooc
  *
  * Queue runners are stopped rather than the actions deleted, so the queue stays
  * intact for inspection and for cutover.
+ *
+ * Exception: WooCommerce webhook deliveries are sent synchronously (see below).
  * ---------------------------------------------------------------------- */
 add_filter('action_scheduler_run_queue', '__return_false', PHP_INT_MAX);
+
+// Webhook deliveries are the one piece of scheduled work allowed on 2.0 (owner decision). They now
+// send straight away in the request that triggers them instead of waiting in the stopped queue.
+// The queue stays off for everything else. Webhooks 19 to 26 are still refused by the
+// woocommerce_webhook_should_deliver filter, and outbound hosts are still limited by the allow-list.
+add_filter('woocommerce_webhook_deliver_async', '__return_false', PHP_INT_MAX);
 
 // DISABLE_WP_CRON only stops page loads from spawning cron; a direct request to wp-cron.php (Kinsta's
 // server cron does exactly that) still runs every due event, including Action Scheduler's queue
