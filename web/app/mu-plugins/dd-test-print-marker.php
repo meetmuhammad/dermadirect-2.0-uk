@@ -278,6 +278,96 @@ function blank_flexible_printing_key($settings)
     return $settings;
 }
 
+/**
+ * Whether this request renders the Flexible Printing settings screen or saves its settings
+ * through options.php. Only there is the stored key left visible, so the field shows it and the
+ * plugin's sanitize merge keeps it.
+ */
+function is_flexible_printing_settings_request(): bool
+{
+    if (!is_admin()) {
+        return false;
+    }
+
+    if (($_GET['page'] ?? null) === 'flexible-printing-settings') {
+        return true;
+    }
+
+    return ($GLOBALS['pagenow'] ?? '') === 'options.php'
+        && ($_POST['option_page'] ?? null) === 'flexible_printing_settings';
+}
+
+/**
+ * Blanks the key everywhere except the settings screen and its save.
+ *
+ * @param mixed $settings
+ * @return mixed
+ */
+function filter_flexible_printing_settings($settings)
+{
+    return is_flexible_printing_settings_request() ? $settings : blank_flexible_printing_key($settings);
+}
+
+/**
+ * Renders the PrintNode API key field as a password input.
+ *
+ * @param mixed $registered Output of the flexible_printing_registered_settings filter.
+ * @return mixed
+ */
+function mask_flexible_printing_key_field($registered)
+{
+    if (!isset($registered['print_node']['print_node']) || !is_array($registered['print_node']['print_node'])) {
+        return $registered;
+    }
+
+    foreach ($registered['print_node']['print_node'] as $index => $field) {
+        if (is_array($field) && ($field['id'] ?? null) === 'print_node_api_key') {
+            $registered['print_node']['print_node'][$index]['type'] = 'password';
+        }
+    }
+
+    return $registered;
+}
+
+/**
+ * The stored Flexible Printing settings straight from the database, bypassing the option filters
+ * (and so the key blanking).
+ *
+ * @return mixed
+ */
+function stored_flexible_printing_settings()
+{
+    global $wpdb;
+
+    $raw = $wpdb->get_var($wpdb->prepare(
+        "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
+        'flexible_printing_settings'
+    ));
+
+    return $raw === null ? null : maybe_unserialize($raw);
+}
+
+/**
+ * Never lets a save replace a stored PrintNode key with an empty one.
+ *
+ * @param mixed $value New value about to be saved.
+ * @return mixed
+ */
+function keep_flexible_printing_key($value)
+{
+    if (!is_array($value) || !empty($value['print_node_api_key'])) {
+        return $value;
+    }
+
+    $stored = stored_flexible_printing_settings();
+
+    if (is_array($stored) && !empty($stored['print_node_api_key'])) {
+        $value['print_node_api_key'] = $stored['print_node_api_key'];
+    }
+
+    return $value;
+}
+
 /* ------------------------------------------------------------------------
  * PickingPal
  * ---------------------------------------------------------------------- */
@@ -360,6 +450,21 @@ add_filter('pre_http_request', function ($preempt, $args, $url) {
 }, 1, 3);
 
 // d. Flexible Printing talks to PrintNode through its own client, bypassing pre_http_request,
-// and prints carrier PDFs that cannot be marked. Blank its API key in memory only.
-add_filter('option_flexible_printing_settings', __NAMESPACE__ . '\blank_flexible_printing_key', PHP_INT_MAX);
+// and prints carrier PDFs that cannot be marked. Its print path reads the key only through the
+// get_option filter below, which always returns '' here. The settings array is blanked in memory
+// too, except on the settings screen and its options.php save, so the (password) field shows the
+// stored key and re-saving keeps it. A save never replaces a stored key with an empty one.
+add_filter('option_flexible_printing_settings', __NAMESPACE__ . '\filter_flexible_printing_settings', PHP_INT_MAX);
 add_filter('flexible_printing_get_option_print_node_api_key', '__return_empty_string', PHP_INT_MAX);
+add_filter('flexible_printing_registered_settings', __NAMESPACE__ . '\mask_flexible_printing_key_field', PHP_INT_MAX);
+add_filter('pre_update_option_flexible_printing_settings', __NAMESPACE__ . '\keep_flexible_printing_key', PHP_INT_MAX);
+
+add_action('admin_notices', function () {
+    if (($_GET['page'] ?? null) !== 'flexible-printing-settings' || ($_GET['tab'] ?? null) !== 'print_node') {
+        return;
+    }
+
+    echo '<div class="notice notice-info"><p>'
+        . esc_html('Saved. Printing from this plugin is disabled on the 2.0 test site.')
+        . '</p></div>';
+});
