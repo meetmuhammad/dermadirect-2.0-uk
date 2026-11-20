@@ -658,3 +658,16 @@ add_filter('woocommerce_product_get_default_attributes', function ($defaults, $p
     }
     return $defaults;
 }, 10, 2);
+
+/**
+ * WebToffee packing slip: barcode is the order number.
+ *
+ * The warehouse scans the order number, matching the theme packing slip (PackingSlipManager). Slips print
+ * at Ship, before any invoice number exists, so WebToffee's default value would be empty and hide the barcode.
+ */
+add_filter('wf_pklist_alter_barcode_data', function ($data, $template_type, $order) {
+    if ($template_type === 'packinglist' && $order instanceof \WC_Order) {
+        return (string) $order->get_order_number();
+    }
+    return $data;
+}, 10, 3);
