@@ -380,12 +380,12 @@ large diagonal red watermark on every page.
   WebToffee's PrintNode add-on add it. Any other job to `api.printnode.com/printjobs` (including
   the WebToffee "Printer test" button) is refused before it is sent and a one-line reason goes to
   the PHP error log.
-- **Flexible Printing is blocked:** it prints carrier label PDFs that cannot be marked, so its
-  PrintNode API key is blanked in memory while marking is on. Nothing is written to the database.
+- **Flexible Printing is not blocked:** it prints from 2.0 with its saved PrintNode key. Its
+  carrier label PDFs cannot be marked, so they print unmarked.
 - **Production is never marked**, whatever the flag says.
 - **The flag:** `DD_PRINT_TEST_BANNER` in `.env` (commented out in `.env.example`). Unset means
   marked. Only `false`, `0`, `off` or `no` turn marking off, which also lifts the PrintNode title
-  guard and the Flexible Printing block. **Keep it unset on 2.0.**
+  guard. **Keep it unset on 2.0.**
 
 Check before any warehouse print:
 
