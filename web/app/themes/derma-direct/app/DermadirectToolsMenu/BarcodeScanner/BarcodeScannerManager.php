@@ -18,6 +18,42 @@ class BarcodeScannerManager
      */
     public const CAPABILITY = 'edit_shop_orders';
 
+    /**
+     * WordPress option production stores the S3 credentials in (key, secret, region, bucket).
+     * DD2.0 writes the same shape plus an optional folder whenever Theme Settings are saved.
+     */
+    public const STORAGE_OPTION = 'barcode_scanner_aws';
+
+    /**
+     * Theme Settings (ACF Composer options page) slug and the storage fields on it.
+     */
+    public const SETTINGS_PAGE_SLUG = 'theme-settings';
+
+    public const DEFAULT_REGION = 'eu-west-2';
+
+    private const SETTINGS_FIELDS = [
+        'key'    => 'aws_s3_key',
+        'secret' => 'aws_s3_secret',
+        'region' => 'aws_s3_region',
+        'bucket' => 'aws_s3_bucket',
+        'folder' => 'aws_s3_folder',
+    ];
+
+    /**
+     * Fields on the Barcode Scanner tab that only manage_options users may see or change.
+     */
+    private const RESTRICTED_FIELDS = [
+        'barcode_scanner',
+        'barcode_scanner_storage_message',
+        'aws_s3_key',
+        'aws_s3_secret',
+        'aws_s3_region',
+        'aws_s3_bucket',
+        'aws_s3_folder',
+    ];
+
+    private static ?array $storageConfig = null;
+
     public static function init(): void
     {
         // Register shortcode
@@ -46,6 +82,194 @@ class BarcodeScannerManager
         add_action('wp_enqueue_scripts', [self::class, 'enqueueAssets']);
         add_action('wp_head', [self::class, 'addInlineStyles']);
         add_action('wp_footer', [self::class, 'addInlineScripts']);
+
+        // Theme Settings: restrict the storage fields and mirror them into the production option.
+        foreach (self::RESTRICTED_FIELDS as $name) {
+            add_filter("acf/prepare_field/name={$name}", [self::class, 'restrictSettingsField']);
+        }
+        foreach (self::SETTINGS_FIELDS as $name) {
+            add_filter("acf/update_value/name={$name}", [self::class, 'guardSettingsValue'], 10, 3);
+        }
+        add_action('acf/save_post', [self::class, 'syncStorageOption'], 20);
+    }
+
+    /**
+     * Hide the storage fields from anyone who cannot manage_options. Hidden fields are not
+     * submitted, so their stored values are left alone.
+     */
+    public static function restrictSettingsField($field)
+    {
+        return current_user_can('manage_options') ? $field : false;
+    }
+
+    /**
+     * Belt and braces for the hidden fields: if a value arrives from a user without
+     * manage_options, keep what is already stored.
+     */
+    public static function guardSettingsValue($value, $postId, $field)
+    {
+        if (!self::isOptionsPost($postId) || current_user_can('manage_options')) {
+            return $value;
+        }
+
+        return get_option('options_' . $field['name'], '');
+    }
+
+    /**
+     * After Theme Settings are saved, write the barcode_scanner_aws option in the same shape
+     * production uses (key, secret, region, bucket) plus folder.
+     *
+     * Skipped when key, secret and bucket are all blank, so saving an unrelated Theme
+     * Settings tab never wipes an option that was set some other way (for example carried
+     * over in a database import).
+     */
+    public static function syncStorageOption($postId): void
+    {
+        if (!self::isOptionsPost($postId) || !current_user_can('manage_options')) {
+            return;
+        }
+
+        $settings = self::readThemeSettings();
+        if ($settings['key'] === '' && $settings['secret'] === '' && $settings['bucket'] === '') {
+            return;
+        }
+
+        update_option(self::STORAGE_OPTION, [
+            'key'    => $settings['key'],
+            'secret' => $settings['secret'],
+            'region' => $settings['region'] !== '' ? $settings['region'] : self::DEFAULT_REGION,
+            'bucket' => $settings['bucket'],
+            'folder' => $settings['folder'],
+        ], false);
+
+        self::$storageConfig = null;
+        self::$s3Client = null;
+    }
+
+    /**
+     * Storage details that are safe to display. Never includes the key or secret values.
+     *
+     * @return array{configured: bool, source: string, key_set: bool, secret_set: bool, region: string, bucket: string, folder: string}
+     */
+    public static function storageStatus(): array
+    {
+        $config = self::storageConfig();
+
+        return [
+            'configured' => $config['source'] !== '',
+            'source'     => $config['source'],
+            'key_set'    => $config['key'] !== '',
+            'secret_set' => $config['secret'] !== '',
+            'region'     => $config['region'],
+            'bucket'     => $config['bucket'],
+            'folder'     => $config['folder'],
+        ];
+    }
+
+    /**
+     * Pick the first complete storage source. A source is complete when key, secret and
+     * bucket are all non-empty after trimming. Region falls back to eu-west-2 and folder is
+     * normalised with normalizeFolder().
+     *
+     * Pure function so it can be tested without WordPress.
+     *
+     * @param array<string, array> $sources Ordered map of source name => raw settings array.
+     * @return array{source: string, key: string, secret: string, region: string, bucket: string, folder: string}
+     */
+    public static function pickStorageConfig(array $sources): array
+    {
+        foreach ($sources as $name => $raw) {
+            $raw = is_array($raw) ? $raw : [];
+            $config = [
+                'source' => (string) $name,
+                'key'    => trim((string) ($raw['key'] ?? '')),
+                'secret' => trim((string) ($raw['secret'] ?? '')),
+                'region' => trim((string) ($raw['region'] ?? '')),
+                'bucket' => trim((string) ($raw['bucket'] ?? '')),
+                'folder' => self::normalizeFolder((string) ($raw['folder'] ?? '')),
+            ];
+
+            if ($config['key'] !== '' && $config['secret'] !== '' && $config['bucket'] !== '') {
+                if ($config['region'] === '') {
+                    $config['region'] = self::DEFAULT_REGION;
+                }
+
+                return $config;
+            }
+        }
+
+        return [
+            'source' => '',
+            'key'    => '',
+            'secret' => '',
+            'region' => self::DEFAULT_REGION,
+            'bucket' => '',
+            'folder' => '',
+        ];
+    }
+
+    /**
+     * Trim whitespace and surrounding slashes from a folder prefix.
+     */
+    public static function normalizeFolder(string $folder): string
+    {
+        return trim(trim($folder), '/');
+    }
+
+    /**
+     * S3 object key for a new photo. With no folder this is the bare id at the bucket root,
+     * exactly as production stores it; otherwise it is "{folder}/{id}".
+     */
+    public static function buildObjectKey(string $id, string $folder = ''): string
+    {
+        $folder = self::normalizeFolder($folder);
+
+        return $folder === '' ? $id : $folder . '/' . $id;
+    }
+
+    /**
+     * Single resolver for S3 storage settings, in priority order:
+     *   1. Theme Settings fields (Barcode Scanner tab)
+     *   2. the barcode_scanner_aws option (production compatible)
+     *   3. env AWS_S3_KEY, AWS_S3_SECRET, AWS_S3_REGION, AWS_S3_BUCKET, AWS_S3_FOLDER
+     */
+    private static function storageConfig(): array
+    {
+        if (self::$storageConfig === null) {
+            self::$storageConfig = self::pickStorageConfig([
+                'theme_settings' => self::readThemeSettings(),
+                'option'         => get_option(self::STORAGE_OPTION, []),
+                'env'            => [
+                    'key'    => env('AWS_S3_KEY'),
+                    'secret' => env('AWS_S3_SECRET'),
+                    'region' => env('AWS_S3_REGION'),
+                    'bucket' => env('AWS_S3_BUCKET'),
+                    'folder' => env('AWS_S3_FOLDER'),
+                ],
+            ]);
+        }
+
+        return self::$storageConfig;
+    }
+
+    /**
+     * Raw storage values from Theme Settings, trimmed. Empty strings when ACF is unavailable.
+     */
+    private static function readThemeSettings(): array
+    {
+        $settings = [];
+        foreach (self::SETTINGS_FIELDS as $key => $field) {
+            $value = function_exists('get_field') ? get_field($field, 'option') : '';
+            $settings[$key] = is_scalar($value) ? trim((string) $value) : '';
+        }
+        $settings['folder'] = self::normalizeFolder($settings['folder']);
+
+        return $settings;
+    }
+
+    private static function isOptionsPost($postId): bool
+    {
+        return in_array($postId, ['options', 'option'], true);
     }
 
     /**
@@ -61,27 +285,25 @@ class BarcodeScannerManager
      * took down the entire order-edit screen with a 500.
      *
      * An unconfigured optional integration must degrade, not break order administration.
+     *
+     * True when any source in storageConfig() (Theme Settings, the barcode_scanner_aws option,
+     * or env) has a non-empty key, secret and bucket.
      */
     private static function s3Configured(): bool
     {
-        foreach (['AWS_S3_KEY', 'AWS_S3_SECRET', 'AWS_S3_BUCKET'] as $key) {
-            if (trim((string) env($key)) === '') {
-                return false;
-            }
-        }
-
-        return true;
+        return self::storageConfig()['source'] !== '';
     }
 
     private static function getS3Client(): S3Client
     {
         if (self::$s3Client === null) {
+            $config = self::storageConfig();
             self::$s3Client = new S3Client([
                 'version' => 'latest',
-                'region' => env('AWS_S3_REGION', 'eu-west-2'),
+                'region' => $config['region'],
                 'credentials' => [
-                    'key' => env('AWS_S3_KEY'),
-                    'secret' => env('AWS_S3_SECRET'),
+                    'key' => $config['key'],
+                    'secret' => $config['secret'],
                 ],
             ]);
         }
@@ -596,14 +818,16 @@ class BarcodeScannerManager
         if (count($errors) == 0) {
             global $wpdb;
             $s3 = self::getS3Client();
-            $bucket = env('AWS_S3_BUCKET', 'dermadirect-images');
+            $storage = self::storageConfig();
+            $bucket = $storage['bucket'];
 
             $attachments = [];
             $uploadDirectory = wp_upload_dir();
 
             for ($index = 0; $index < count($photos['name']); $index++) {
-                $key = uniqid();
-                $newPhotoPath = $uploadDirectory['path'] . '/' . $key . '-' . $photos['name'][$index];
+                $id = uniqid();
+                $key = self::buildObjectKey($id, $storage['folder']);
+                $newPhotoPath = $uploadDirectory['path'] . '/' . $id . '-' . $photos['name'][$index];
                 move_uploaded_file($photos['tmp_name'][$index], $newPhotoPath);
 
                 $s3->putObject([
@@ -683,8 +907,9 @@ class BarcodeScannerManager
 
         if ($photosS3) {
             $s3 = self::getS3Client();
-            $bucket = env('AWS_S3_BUCKET', 'dermadirect-images');
+            $bucket = self::storageConfig()['bucket'];
 
+            // Stored keys already include any folder prefix that was active at upload time.
             foreach ($photosS3 as $key) {
                 $photoUrl = $s3->getObjectUrl($bucket, $key);
                 echo '<a href="' . esc_url($photoUrl) . '" target="_blank" style="margin-bottom: 10px"><img src="' . esc_url($photoUrl) . '" style="width: 100%" /></a>';
@@ -704,7 +929,7 @@ class BarcodeScannerManager
         }
 
         $s3 = self::getS3Client();
-        $bucket = env('AWS_S3_BUCKET', 'dermadirect-images');
+        $bucket = self::storageConfig()['bucket'];
 
         global $wpdb;
         $images = $wpdb->get_results(
@@ -714,6 +939,7 @@ class BarcodeScannerManager
             )
         );
 
+        // image_key is the full object key as uploaded (folder prefix included), so delete by it.
         foreach ($images as $image) {
             $s3->deleteObject([
                 'Bucket' => $bucket,

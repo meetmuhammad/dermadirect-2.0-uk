@@ -53,6 +53,14 @@ class AdminPage
         $table_name = $wpdb->prefix . 'barcode_scanner_images';
         $table_exists = $wpdb->get_var("SHOW TABLES LIKE '$table_name'") === $table_name;
 
+        $storage = BarcodeScannerManager::storageStatus();
+        $settingsUrl = admin_url('admin.php?page=' . BarcodeScannerManager::SETTINGS_PAGE_SLUG);
+        $sourceLabels = [
+            'theme_settings' => 'Theme Settings',
+            'option'         => 'the ' . BarcodeScannerManager::STORAGE_OPTION . ' option',
+            'env'            => 'environment variables',
+        ];
+
         ?>
         <div class="wrap">
             <h1>Barcode Scanner Setup</h1>
@@ -90,9 +98,23 @@ class AdminPage
                 <h2>AWS S3 Configuration</h2>
                 <table class="form-table">
                     <tr>
+                        <th>Status:</th>
+                        <td>
+                            <?php if ($storage['configured']): ?>
+                                <span style="color: green;">✓ Configured</span>
+                                <?php if (isset($sourceLabels[$storage['source']])): ?>
+                                    <br><span class="description">Using <?php echo esc_html($sourceLabels[$storage['source']]); ?></span>
+                                <?php endif; ?>
+                            <?php else: ?>
+                                <span style="color: red;">✗ Not configured</span>
+                                <br><span class="description">Photo uploads are disabled until an AWS key, secret and bucket are set.</span>
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <tr>
                         <th>AWS Key:</th>
                         <td>
-                            <?php if (env('AWS_S3_KEY')): ?>
+                            <?php if ($storage['key_set']): ?>
                                 <span style="color: green;">✓ Configured</span>
                             <?php else: ?>
                                 <span style="color: red;">✗ Not configured</span>
@@ -102,7 +124,7 @@ class AdminPage
                     <tr>
                         <th>AWS Secret:</th>
                         <td>
-                            <?php if (env('AWS_S3_SECRET')): ?>
+                            <?php if ($storage['secret_set']): ?>
                                 <span style="color: green;">✓ Configured</span>
                             <?php else: ?>
                                 <span style="color: red;">✗ Not configured</span>
@@ -111,13 +133,42 @@ class AdminPage
                     </tr>
                     <tr>
                         <th>AWS Region:</th>
-                        <td><code><?php echo esc_html(env('AWS_S3_REGION', 'Not set')); ?></code></td>
+                        <td><code><?php echo esc_html($storage['region']); ?></code></td>
                     </tr>
                     <tr>
                         <th>S3 Bucket:</th>
-                        <td><code><?php echo esc_html(env('AWS_S3_BUCKET', 'Not set')); ?></code></td>
+                        <td>
+                            <?php if ($storage['bucket'] !== ''): ?>
+                                <code><?php echo esc_html($storage['bucket']); ?></code>
+                            <?php else: ?>
+                                Not set
+                            <?php endif; ?>
+                        </td>
+                    </tr>
+                    <tr>
+                        <th>S3 Folder:</th>
+                        <td>
+                            <?php if ($storage['folder'] !== ''): ?>
+                                <code><?php echo esc_html($storage['folder'] . '/'); ?></code>
+                            <?php else: ?>
+                                Bucket root
+                            <?php endif; ?>
+                        </td>
                     </tr>
                 </table>
+                <p>
+                    <a href="<?php echo esc_url($settingsUrl); ?>" class="button button-primary">Edit storage settings</a>
+                </p>
+                <p class="description">
+                    Open Theme Settings and choose the <strong>Barcode Scanner</strong> tab. Settings saved there take priority,
+                    then the <code><?php echo esc_html(BarcodeScannerManager::STORAGE_OPTION); ?></code> option, then the
+                    AWS_S3_* environment variables.
+                </p>
+            </div>
+
+            <div class="card" style="max-width: 800px; margin-top: 20px;">
+                <h2>How It Works</h2>
+                <ol>
                     <li>Point camera at a CODE_128 barcode (WooCommerce order ID)</li>
                     <li>Upload photos of the order</li>
                     <li>Photos are compressed and uploaded to S3</li>
