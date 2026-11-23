@@ -9,6 +9,8 @@ use App\Helper\Helper;
 class ThemeSettings extends Field
 {
     public $name = 'Theme Settings';
+    // Pinned so wp-admin links (admin.php?page=theme-settings) keep working if the name changes.
+    public $slug = 'theme-settings';
     public $title = 'Theme Settings | Options';
     public $position = 2;
 
@@ -234,6 +236,36 @@ class ThemeSettings extends Field
                 'return_format'  => 'Y-m-d H:i:s',
             ])
         ->endRepeater();
+
+        // ------------------------------------------------------------
+        // Warehouse barcode scanner photo storage. Saving this page also mirrors these
+        // values into the barcode_scanner_aws option (see BarcodeScannerManager).
+        $builder
+            ->addTab('barcode_scanner', [
+                'label' => __('Barcode Scanner', 'sage'),
+            ]);
+
+        $builder
+            ->addMessage('barcode_scanner_storage', __('Amazon S3 storage for warehouse barcode scanner photos. Only administrators can view or change these values.', 'sage'), [
+                'label' => __('Photo storage', 'sage'),
+            ])
+            ->addPassword('aws_s3_key', [
+                'label' => __('AWS Access Key', 'sage'),
+            ])
+            ->addPassword('aws_s3_secret', [
+                'label' => __('AWS Secret Key', 'sage'),
+            ])
+            ->addText('aws_s3_region', [
+                'label'         => __('AWS Region', 'sage'),
+                'default_value' => 'eu-west-2',
+            ])
+            ->addText('aws_s3_bucket', [
+                'label' => __('S3 Bucket', 'sage'),
+            ])
+            ->addText('aws_s3_folder', [
+                'label'        => __('S3 Folder', 'sage'),
+                'instructions' => __('Optional. Leave blank to store photos at the bucket root, the same as production. A value such as dd20-staging is used as a prefix, so each photo is stored under dd20-staging/ in the bucket.', 'sage'),
+            ]);
 
         return $builder->build();
     }
