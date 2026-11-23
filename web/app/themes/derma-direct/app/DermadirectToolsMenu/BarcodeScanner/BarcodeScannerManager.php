@@ -31,6 +31,11 @@ class BarcodeScannerManager
 
     public const DEFAULT_REGION = 'eu-west-2';
 
+    /**
+     * Most photos stored per upload. Matches data-max-files on the FilePond input.
+     */
+    public const MAX_PHOTOS = 2;
+
     private const SETTINGS_FIELDS = [
         'key'    => 'aws_s3_key',
         'secret' => 'aws_s3_secret',
@@ -225,6 +230,56 @@ class BarcodeScannerManager
         $folder = self::normalizeFolder($folder);
 
         return $folder === '' ? $id : $folder . '/' . $id;
+    }
+
+    /**
+     * Indexes of the uploaded files to store, in order. A file is skipped when its hash is
+     * empty (upload error or unreadable) or was already seen in this request, and at most
+     * $max files are kept.
+     *
+     * Pure function so it can be tested without WordPress.
+     *
+     * @param array<int, string|false|null> $hashes Upload index => content hash.
+     * @return int[]
+     */
+    public static function uniqueUploadIndexes(array $hashes, int $max = self::MAX_PHOTOS): array
+    {
+        $keep = [];
+        $seen = [];
+
+        foreach ($hashes as $index => $hash) {
+            if (count($keep) >= $max) {
+                break;
+            }
+
+            $hash = (string) $hash;
+            if ($hash === '' || isset($seen[$hash])) {
+                continue;
+            }
+
+            $seen[$hash] = true;
+            $keep[] = $index;
+        }
+
+        return $keep;
+    }
+
+    /**
+     * Content hash of one entry in a multi-file $_FILES array, or an empty string when the
+     * upload failed or the temporary file cannot be read.
+     */
+    private static function uploadedFileHash(array $photos, int $index): string
+    {
+        $error = $photos['error'][$index] ?? UPLOAD_ERR_NO_FILE;
+        $tmpName = (string) ($photos['tmp_name'][$index] ?? '');
+
+        if ((int) $error !== UPLOAD_ERR_OK || $tmpName === '' || !is_uploaded_file($tmpName)) {
+            return '';
+        }
+
+        $hash = md5_file($tmpName);
+
+        return $hash === false ? '' : $hash;
     }
 
     /**
@@ -702,66 +757,103 @@ class BarcodeScannerManager
                         storeAsFile: true
                     });
 
-                    $('#barcode-scanner-form').submit(function (e) {
-                        e.preventDefault();
-                        $('#barcode-scanner-alert').hide();
-                        $('#barcode-scanner-upload').text('Uploading...');
-                        var url = $(this).data('url');
-                        var data = new FormData($(this)[0]);
-                        var pondFiles = filePond.getFiles();
-                        if (pondFiles.length == 0) {
-                            $.ajax({
-                                type: 'POST',
-                                url: url,
-                                data: data,
-                                dataType: 'json',
-                                contentType: false,
-                                processData: false,
-                                success: function (response) {
-                                    if (response.status == 'success') {
-                                        $('#barcode-scanner-alert').removeClass('alert-danger').addClass('alert-success').text(response.message).show();
-                                        setTimeout(function () {
-                                            window.location.reload();
-                                        }, 3000);
-                                    } else {
-                                        $('#barcode-scanner-alert').removeClass('alert-success').addClass('alert-danger').text(response.error).show();
-                                    }
+                    var uploadButton = $('#barcode-scanner-upload');
+                    var uploadButtonLabel = uploadButton.text();
+                    var uploading = false;
 
-                                    $('#barcode-scanner-upload').text('Upload');
-                                }
-                            });
-                        } else {
-                            for (var i = 0; i < pondFiles.length; i++) {
-                                new Compressor(pondFiles[i].file, {
+                    function finishUpload() {
+                        uploading = false;
+                        uploadButton.prop('disabled', false).text(uploadButtonLabel);
+                    }
+
+                    function showUploadError(message) {
+                        $('#barcode-scanner-alert').removeClass('alert-success').addClass('alert-danger').text(message).show();
+                    }
+
+                    // Resolves with the compressed file, or with the original if compression fails.
+                    function compressPhoto(file) {
+                        return new Promise(function (resolve) {
+                            try {
+                                new Compressor(file, {
                                     quality: 0.3,
                                     success: function (result) {
-                                        data.append('photos[]', result, result.name);
-                                        if (i == pondFiles.length) {
-                                            $.ajax({
-                                                type: 'POST',
-                                                url: url,
-                                                data: data,
-                                                dataType: 'json',
-                                                contentType: false,
-                                                processData: false,
-                                                success: function (response) {
-                                                    if (response.status == 'success') {
-                                                        $('#barcode-scanner-alert').removeClass('alert-danger').addClass('alert-success').text(response.message).show();
-                                                        setTimeout(function () {
-                                                            window.location.reload();
-                                                        }, 3000);
-                                                    } else {
-                                                        $('#barcode-scanner-alert').removeClass('alert-success').addClass('alert-danger').text(response.error).show();
-                                                    }
-
-                                                    $('#barcode-scanner-upload').text('Upload');
-                                                }
-                                            });
-                                        }
+                                        resolve(result);
+                                    },
+                                    error: function () {
+                                        resolve(file);
                                     }
                                 });
+                            } catch (error) {
+                                resolve(file);
                             }
+                        });
+                    }
+
+                    function sendUpload(url, data) {
+                        $.ajax({
+                            type: 'POST',
+                            url: url,
+                            data: data,
+                            dataType: 'json',
+                            contentType: false,
+                            processData: false,
+                            success: function (response) {
+                                if (response && response.status == 'success') {
+                                    $('#barcode-scanner-alert').removeClass('alert-danger').addClass('alert-success').text(response.message).show();
+                                    setTimeout(function () {
+                                        window.location.reload();
+                                    }, 3000);
+                                } else {
+                                    showUploadError(response && response.error ? response.error : 'Something went wrong. Please try again.');
+                                }
+
+                                finishUpload();
+                            },
+                            error: function () {
+                                showUploadError('The upload failed. Please try again.');
+                                finishUpload();
+                            }
+                        });
+                    }
+
+                    $('#barcode-scanner-form').submit(function (e) {
+                        e.preventDefault();
+
+                        if (uploading) {
+                            return;
                         }
+                        uploading = true;
+
+                        $('#barcode-scanner-alert').hide();
+                        uploadButton.prop('disabled', true).text('Uploading...');
+
+                        var url = $(this).data('url');
+                        var data = new FormData($(this)[0]);
+
+                        // FilePond (storeAsFile) keeps the original photos in a native input
+                        // named photos[] inside this form. Drop them so only the compressed
+                        // copies below are sent.
+                        data.delete('photos[]');
+
+                        var pondFiles = filePond.getFiles();
+                        if (pondFiles.length == 0) {
+                            sendUpload(url, data);
+                            return;
+                        }
+
+                        var originals = pondFiles.map(function (pondFile) {
+                            return pondFile.file;
+                        });
+
+                        Promise.all(originals.map(compressPhoto)).then(function (results) {
+                            results.forEach(function (result, index) {
+                                data.append('photos[]', result, result.name || originals[index].name);
+                            });
+                            sendUpload(url, data);
+                        }).catch(function () {
+                            showUploadError('The upload failed. Please try again.');
+                            finishUpload();
+                        });
                     });
                 }
             });
@@ -787,6 +879,7 @@ class BarcodeScannerManager
         $orderId = sanitize_text_field($_POST['order_id'] ?? '');
         $photos = $_FILES['photos'] ?? null;
         $errors = [];
+        $keepIndexes = [];
 
         if ($orderId == '') {
             array_push($errors, 'You must scan the barcode first');
@@ -806,6 +899,18 @@ class BarcodeScannerManager
                     array_push($errors, 'You must upload image');
                 }
             }
+
+            // Store each distinct photo once per request, even if the browser sends the same
+            // file twice. Files that failed to upload or cannot be read are skipped.
+            $hashes = [];
+            for ($index = 0; $index < count($photos['name']); $index++) {
+                $hashes[$index] = self::uploadedFileHash($photos, $index);
+            }
+            $keepIndexes = self::uniqueUploadIndexes($hashes, self::MAX_PHOTOS);
+
+            if (count($errors) == 0 && count($keepIndexes) == 0) {
+                array_push($errors, 'Photo is required');
+            }
         }
 
         if (count($errors) == 0 && !self::s3Configured()) {
@@ -824,7 +929,7 @@ class BarcodeScannerManager
             $attachments = [];
             $uploadDirectory = wp_upload_dir();
 
-            for ($index = 0; $index < count($photos['name']); $index++) {
+            foreach ($keepIndexes as $index) {
                 $id = uniqid();
                 $key = self::buildObjectKey($id, $storage['folder']);
                 $newPhotoPath = $uploadDirectory['path'] . '/' . $id . '-' . $photos['name'][$index];
